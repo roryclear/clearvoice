@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<head>
+<style>
+  body {
+    font-family: Arial, Helvetica, sans-serif;
+  }
+
+  textarea {
+    width: 100%;
+    max-width: 500px;
+    height: 80px;
+    resize: vertical;
+  }
+
+  input[type="text"] {
+    width: 100%;
+    max-width: 500px;
+  }
+
+  #language {
+    width: 50%;
+    max-width: 250px;
+  }
+
+  #selected_voice {
+    width: 100%;
+    max-width: 300px;
+  }
+
+  form {
+    margin-bottom: 20px;
+  }
+</style>
+</head>
+
+<!-- ADD NEW VOICE -->
+<h2>Add New Voice</h2>
+<form id="voiceForm" enctype="multipart/form-data">
+  <input type="file" name="file"><br>
+  <textarea name="ref_text" placeholder="Ref text"></textarea><br>
+  <input type="text" name="voice_name" placeholder="Voice name"><br>
+  <button type="submit">Save Voice</button>
+</form>
+
+<hr>
+
+<!-- GENERATE AUDIO -->
+<h2>Generate Audio</h2>
+<form id="generateForm" enctype="multipart/form-data">
+  <textarea name="target_text" placeholder="Target text"></textarea><br>
+
+  <select name="language" id="language">
+    <option value="None">Auto Language</option>
+  </select><br>
+
+  <select name="selected_voice" id="selected_voice">
+    <option value="">Select Voice</option>
+  </select><br>
+
+  <button type="submit">Generate Audio</button>
+</form>
+
+<br>
+<audio id="player" controls></audio>
+
+<script>
+const voiceForm = document.getElementById("voiceForm");
+const generateForm = document.getElementById("generateForm");
+const player = document.getElementById("player");
+const select = document.getElementById("language");
+
+// Load languages
+async function loadLanguages() {
+  try {
+    const res = await fetch("/languages.json");
+    const languages = await res.json();
+
+    select.innerHTML = '<option value="None">Auto Language</option>';
+
+    languages.forEach(lang => {
+      const option = document.createElement("option");
+      option.value = lang.id;
+      option.textContent = lang.name;
+      select.appendChild(option);
+    });
+  } catch (err) {
+    select.innerHTML = '<option value="">Failed to load languages</option>';
+    console.error(err);
+  }
+}
+
+// Load voices
+async function loadVoices() {
+  try {
+    const res = await fetch("/voices");
+    const voices = await res.json();
+
+    const voiceSelect = document.getElementById("selected_voice");
+    voiceSelect.innerHTML = '<option value="">Select Voice</option>';
+
+    voices.forEach(voice => {
+      const option = document.createElement("option");
+      option.value = voice;
+      option.textContent = voice;
+      voiceSelect.appendChild(option);
+    });
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+loadLanguages();
+loadVoices();
+
+
+voiceForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+
+  const formData = new FormData(voiceForm);
+
+  try {
+    const response = await fetch("/", {
+      method: "POST",
+      body: formData
+    });
+
+    if (response.ok) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+      await loadVoices();
+      voiceForm.reset();
+    } else {
+      const errorText = await response.text();
+      alert(`Failed to save voice: ${errorText}`);
+    }
+  } catch (err) {
+    console.error("Error saving voice:", err);
+    alert("Error saving voice. Check console for details.");
+  }
+});
+
+generateForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+
+  const formData = new FormData(generateForm);
+
+  const response = await fetch("/", {
+    method: "POST",
+    body: formData
+  });
+
+  const blob = await response.blob();
+
+  const url = URL.createObjectURL(blob);
+  player.src = url;
+  player.play();
+});
+</script>
