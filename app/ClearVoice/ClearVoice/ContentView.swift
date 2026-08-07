@@ -404,7 +404,7 @@ struct AddVoiceView: View {
 
             TextEditor(text: $transcript)
                 .frame(height: 80)
-                .frame(maxWidth: .infinity)
+                .frame(width: 300, height: 100)
                 .overlay(
                     RoundedRectangle(cornerRadius: 8)
                         .stroke(Color.gray.opacity(0.3))
