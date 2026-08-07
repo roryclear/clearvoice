@@ -754,28 +754,22 @@ struct ContentView: View {
                 }
                 .padding(.horizontal)
                 
-                HStack {
-                    Picker("Voice", selection: $selectedVoice) {
-                        ForEach(voices, id: \.self) { url in
-                            Text(url.deletingPathExtension().lastPathComponent)
-                                .tag(Optional(url))
-                        }
+                Picker("Voice", selection: $selectedVoice) {
+                    ForEach(voices, id: \.self) { url in
+                        Text(url.deletingPathExtension().lastPathComponent)
+                            .tag(Optional(url))
                     }
-                    .pickerStyle(.menu)
-                    .padding(8)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(Color.gray.opacity(0.4))
-                    )
-
-                    NavigationLink("Manage Voices") {
-                        VoiceListView(
-                            voices: $voices,
-                            selectedVoice: $selectedVoice
-                        )
-                    }
-                    .buttonStyle(.bordered)
                 }
+                .pickerStyle(.menu)
+                .frame(width: 180)
+                    
+                NavigationLink("Manage Voices") {
+                    VoiceListView(
+                        voices: $voices,
+                        selectedVoice: $selectedVoice
+                    )
+                }
+                .buttonStyle(.bordered)
                 
                 NavigationLink(destination: AddVoiceView(onDismiss: {
                     loadVoices()
@@ -868,7 +862,7 @@ struct ContentView: View {
             .alert("Memory Warning", isPresented: $showRAMWarning) {
                 Button("OK") {}
             } message: {
-                Text("6GB of available RAM required to run the voice model to avoid crashes.")
+                Text("6GB of available RAM is required to run the voice model to avoid crashes. Newer iPhone or iPad Pro models are recommended.")
             }
             #if os(iOS)
             .padding()
