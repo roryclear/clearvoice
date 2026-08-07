@@ -86,7 +86,6 @@ class Tokenizer {
             }
         )
 
-        // Normal vocab
         let model = json["model"] as! [String: Any]
         let vocab = model["vocab"] as! [String: Int32]
 
@@ -99,7 +98,6 @@ class Tokenizer {
             }
         )
 
-        // Assign all properties last
         self.byteDecoder = decoder
         self.specialTokens = specials
         self.normalTokensBytes = normal
