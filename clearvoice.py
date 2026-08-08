@@ -782,6 +782,7 @@ class omni:
     for i in range(len(chunks)):
       target_length = self._estimate_target_tokens(chunks[i], ref_text, int(wav_len / self.audio_tokenizer.hop_length))
       text_tokens = tok.encode(f"<|text_start|>{' '.join(x.strip() for x in (ref_text, chunks[i]) if x.strip())}<|text_end|>")
+      print("CHUNK",i,"of",len(chunks))
       ret = self._generate_iterative(text_tokens=text_tokens, target_length=target_length, ref_audio_tokens=ref_audio_tokens, num_steps=num_steps, style_tokens=style_tokens)
       rets.append(ret)
       target_lengths.append(target_length)
@@ -1038,6 +1039,13 @@ class Handler(BaseHTTPRequestHandler):
     #  self.send_response(500)
     #  self.end_headers()
 
+def save_voice(audio, voice_name, text):
+  if type(audio) == str:
+    with open(audio, "rb") as f: audio = f.read()
+  voice = {"ref_text":text,
+    "ref_audio":base64.b64encode(audio).decode("ascii")} 
+  json.dump(voice, open(f"voices/{voice_name}.cv", "w"))
+
 if __name__ == "__main__":
   import os
   import glob
@@ -1045,14 +1053,7 @@ if __name__ == "__main__":
   model = omni()
   
   if "--test" in sys.argv:
-    '''
-    with open("voices/rory-15s.wav", "rb") as f:
-      voice = {"ref_text":"Yeah so I was just on the thirty three there, on my way to astro, and like I'm just reading my book and looking out the window, and I look, and there's a dog getting on the bus, and the thing has a leap card in its mouth, and it jumps up and taps the machine",
-        "ref_audio":base64.b64encode(f.read()).decode("ascii")} 
-      json.dump(voice, open("voices/Rory.cv", "w"))
-    exit()
-    '''
-    
+    save_voice(audio="voices/rory-15s.wav", voice_name="Rory", text="Yeah so I was just on the thirty three there, on my way to astro, and like I'm just reading my book and looking out the window, and I look, and there's a dog getting on the bus, and the thing has a leap card in its mouth, and it jumps up and taps the machine")    
     os.makedirs("outputs", exist_ok=True)
     Tensor.manual_seed(0)
 

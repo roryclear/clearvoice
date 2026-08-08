@@ -33,10 +33,9 @@
 </style>
 </head>
 
-<!-- ADD NEW VOICE -->
 <h2>Add New Voice</h2>
 <form id="voiceForm" enctype="multipart/form-data">
-  <input type="file" name="file"><br>
+  <input type="file" name="file"><small>(WAV files only, &lt;15s or REF_AUDIO_LENs)</small><br>
   <textarea name="ref_text" placeholder="Ref text"></textarea><br>
   <input type="text" name="voice_name" placeholder="Voice name"><br>
   <button type="submit">Save Voice</button>
