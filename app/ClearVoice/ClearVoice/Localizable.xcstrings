@@ -8,7 +8,14 @@
 
     },
     "6GB of available RAM is required to run the voice model to avoid crashes. Newer iPhone or iPad Pro models are recommended." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "运行语音模型需要至少 6GB 的可用内存，以避免发生崩溃。建议使用较新的 iPhone 或 iPad Pro 机型。"
+          }
+        }
+      }
     },
     "Add New Voice" : {
 
