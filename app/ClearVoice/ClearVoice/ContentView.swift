@@ -366,7 +366,7 @@ struct AddVoiceView: View {
 
     var body: some View {
         VStack(spacing: 20) {
-
+            Text("Press to record your voice speaking, then enter what you said in the transcript") .multilineTextAlignment(.center) .foregroundColor(.secondary) .padding(.horizontal)
             HStack {
                 Button {
                     startRecording()

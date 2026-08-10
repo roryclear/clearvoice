@@ -1,7 +1,77 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "" : {
 
+    },
+    "%lld%%" : {
+
+    },
+    "6GB of available RAM is required to run the voice model to avoid crashes. Newer iPhone or iPad Pro models are recommended." : {
+
+    },
+    "Add New Voice" : {
+
+    },
+    "Auto Language" : {
+
+    },
+    "ClearVoice" : {
+
+    },
+    "Delete" : {
+
+    },
+    "Done" : {
+
+    },
+    "Enter Text:" : {
+
+    },
+    "Generate Audio" : {
+
+    },
+    "Manage Voices" : {
+
+    },
+    "Memory Warning" : {
+
+    },
+    "OK" : {
+
+    },
+    "Press to record your voice speaking, then enter what you said in the transcript" : {
+
+    },
+    "Recording %llds" : {
+
+    },
+    "Right-click to delete a voice" : {
+
+    },
+    "Save Voice" : {
+
+    },
+    "Swipe left to delete a voice" : {
+
+    },
+    "Transcript:" : {
+
+    },
+    "Voice" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Voice"
+          }
+        }
+      }
+    },
+    "Voice name..." : {
+
+    }
   },
   "version" : "1.2"
 }
