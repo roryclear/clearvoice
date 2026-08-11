@@ -901,6 +901,12 @@ struct ContentView: View {
         let files = try? fm.contentsOfDirectory(at: documents, includingPropertiesForKeys: nil) {
             found.append(contentsOf: files.filter { $0.pathExtension == "cv" })
         }
+        // put me first
+        found.sort { a, b in
+            if a.lastPathComponent == "Rory.cv" { return true }
+            if b.lastPathComponent == "Rory.cv" { return false }
+            return false
+        }
         voices = found
         if selectedVoice == nil { selectedVoice = voices.first }
     }
