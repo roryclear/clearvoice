@@ -995,7 +995,7 @@ func generate(text: String, cvFile: String, num_steps: Int, language: String) {
             
             let audio_mask_flat = audio_mask.flatMap { $0 }
             buffers[AUDIO_MASK_BUF]!.contents().copyMemory(from: audio_mask_flat, byteCount: audio_mask_flat.count)
-            
+            print(target_length, c_len)
             if (step == 0) {
                 model_graph.run(vals_dict: [113: target_length ,373: c_len], globals_dict: [113: target_length ,373: c_len, 373*2: c_len*2])
             } else {
@@ -1026,8 +1026,6 @@ func generate(text: String, cvFile: String, num_steps: Int, language: String) {
             sampleTokens = stride(from: 0, to: sampleTokensFlat.count, by: target_length).map { Array(sampleTokensFlat[$0..<($0 + target_length)]) }
             
             for i in 0..<NUM_AUDIO_CODEBOOK { for j in 0..<target_length { tokens[i][j] = sampleTokens[i][j] } }
-            print(sampleTokens)
-            
             for i in 0..<NUM_AUDIO_CODEBOOK {
                 for j in 0..<target_length {
                     input_ids[0][i][c_len - target_length + j] = sampleTokens[i][j]
@@ -1062,9 +1060,6 @@ func generate(text: String, cvFile: String, num_steps: Int, language: String) {
     } catch {
         print("Error writing file: \(error)")
     }
-    
-    print("rory rets =",rets)
-    print("1")
     
     buffers.removeAll()
     buffer_sz.removeAll()
@@ -1446,8 +1441,7 @@ func getChunks(text: String, refText: String, wavLen: Int, styleTokens: [Int32],
             }
         }
     }
-    print(chunks)
-    return chunks
+    return chunks.filter { !$0.isEmpty }
 }
 
 func estimateTargetTokens(text: String, refText: String, numRefAudioTokens: Int,) -> Int {
