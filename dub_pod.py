@@ -3,7 +3,7 @@ import subprocess, os
 
 def save_audio(start, end):
   os.remove("tmp.wav")
-  subprocess.run(["ffmpeg", "-ss", start, "-to", end, "-i", "podcast/podcast.mp4", "-vn", "-acodec", "pcm_s16le", "tmp.wav"])
+  subprocess.run(["ffmpeg", "-ss", str(start), "-to", str(end), "-i", "podcast/podcast.mp4", "-vn", "-acodec", "pcm_s16le", "tmp.wav"])
 
 def save_voice_from_audio(start, end, voice_name, text):
   save_audio(start=start, end=end)
@@ -54,15 +54,17 @@ def parse_srt_file(file):
     return subtitles
 
 if __name__ == "__main__":
-  subtitles_cn = parse_srt_file("podcast/english.srt")
-  print(subtitles_cn)
-
-  subtitles_en = parse_srt_file("podcast/chinese.srt")
+  subtitles_en = parse_srt_file("podcast/english.srt")
   print(subtitles_en)
-  exit()
+
+  subtitles_cn = parse_srt_file("podcast/chinese.srt")
+  print(subtitles_cn)
+  #exit()
   model = omni()
+  '''
   save_voice_from_audio(start="00:05:35.5", end="00:05:47.5", voice_name="host",
                         text="因为那个顺雨他之前在去年的时候说, AI进入了the second half, 进入了下半场这个成为了一个非常有名的观点, 你觉得今天的AI在一个什么样的时期, 你能给它一个定义吗")
+  
   audio = model.generate(
     text="hello, this is the host of the podcast speaking english now, can you understand me or not? thank you for listening.",
     cv_path="voices/host.cv",
@@ -70,10 +72,11 @@ if __name__ == "__main__":
     language="en"
   )
   with open("outputs/host_test.wav", "wb") as f: f.write(waveform_to_wav_bytes(audio, SAMPLING_RATE))
+  
 
   save_voice_from_audio(start="00:08:55", end="00:09:09", voice_name="guest",
                         text="我觉得呢, 其实是有意愿的成分在的, 尤其在过去的情况下主要是意愿, 就是当大家能从纸面上就看出区别的时候, 那时候意愿肯定是占大多数的")
-
+  
   audio = model.generate(
     text="hello, this is the guest of the podcast speaking english now, can you understand me or not? thank you for listening.",
     cv_path="voices/guest.cv",
@@ -81,11 +84,78 @@ if __name__ == "__main__":
     language="en"
   )
   with open("outputs/guest_test.wav", "wb") as f: f.write(waveform_to_wav_bytes(audio, SAMPLING_RATE))
+  '''
+  #exit()
 
   # for now manually just say when speaker changes...
-  voice_chages = [94, 157, 166]
+  voice_changes = [94, 157, 166]
   host = True
-  #for t in voice_chages:
+  time = 86 # skip into
+  change_idx = 0
+  sub_idx = 0
+  while subtitles_cn[sub_idx].end < time: sub_idx+=1
+  #while sub_idx < len(subtitles_cn):
+  text_cn = subtitles_cn[sub_idx].text
+  text_en = subtitles_en[sub_idx].text
+  i = 1
+  cn_start = subtitles_cn[sub_idx].start
+  while subtitles_cn[sub_idx+i].end < voice_changes[change_idx]:
+    print("end =",subtitles_cn[sub_idx+i].end, voice_changes[change_idx])
 
+    if subtitles_cn[sub_idx+i].end - subtitles_cn[sub_idx].start < 15: # max 15 sec ref
+      text_cn += subtitles_cn[sub_idx+i].text
+      if subtitles_cn[sub_idx+i].start - subtitles_cn[sub_idx+i-1].end > 0:
+        text_cn += ","
+
+    # todo dup
+    if subtitles_cn[sub_idx+i].start - subtitles_cn[sub_idx+i-1].end > 0:
+      text_en += ","
+
+    text_en += subtitles_en[sub_idx+i].text
+    i+=1
+  print(text_cn, "\n", text_en)
+  print("start =",subtitles_cn[sub_idx].start, "end =",subtitles_cn[sub_idx+i].end)
+  new_voice = (subtitles_cn[sub_idx+i].end - subtitles_cn[sub_idx].start) > 5 # min 5 seconds sample
+  if new_voice:
+    save_voice_from_audio(start=subtitles_cn[sub_idx].start, end=subtitles_cn[sub_idx+i].end, voice_name="tmp", text=text_cn)
+    audio = model.generate(
+      text=text_en,
+      cv_path="voices/tmp.cv",
+      num_steps=32,
+      language="en"
+    )
+    with open("outputs/tmp.wav", "wb") as f: f.write(waveform_to_wav_bytes(audio, SAMPLING_RATE))
+  else:
+    print("TOO SHORT, USE BACKUP VOICE")
+    exit()
+
+  # slop ffmpeg normally is ok...
+  start_time = subtitles_cn[sub_idx].start
+  end_time = subtitles_cn[sub_idx + i].end
+
+  # Output to temp file first
+  temp_output = "podcast/podcast_en_temp.wav"
+
+  cmd = [
+      "ffmpeg",
+      "-y",
+      "-i", "podcast/podcast_en.wav",
+      "-i", "outputs/tmp.wav",
+      "-filter_complex",
+      f"[0:a]atrim=0:{start_time},asetpts=PTS-STARTPTS[before];"
+      f"[0:a]atrim={end_time},asetpts=PTS-STARTPTS[after];"
+      f"[1:a]apad=whole_dur={end_time - start_time}[replacement];"
+      f"[before][replacement][after]concat=n=3:v=0:a=1[outa]",
+      "-map", "[outa]",
+      temp_output
+  ]
+
+  subprocess.run(cmd, check=True)
+
+  # Replace original with temp file
+  os.replace(temp_output, "podcast/podcast_en.wav")
+    
+  sub_idx+=i
+  host = not host
 
   print("here")
