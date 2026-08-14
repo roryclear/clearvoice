@@ -2,7 +2,7 @@ import math
 import re
 import struct
 import pickle
-
+import base64
 import numpy as np
 
 from tinygrad.helpers import fetch, partition
@@ -1049,7 +1049,6 @@ def save_voice(audio, voice_name, text):
 if __name__ == "__main__":
   import os
   import glob
-  import base64
   model = omni()
   
   if "--test" in sys.argv:
