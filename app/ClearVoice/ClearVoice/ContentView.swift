@@ -803,8 +803,8 @@ struct ContentView: View {
                 }
 
                 if showPlayer {
-                    let url = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-                        .appendingPathComponent("output.wav")
+                    let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                    let url = documentsURL.appendingPathComponent("output.wav")
 
                     HStack {
                         Button(action: { playAudio(url) }) {
@@ -845,8 +845,8 @@ struct ContentView: View {
                         isGenerating = false
                         generationProgress = 0
                         showPlayer = true
-                        let url = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-                            .appendingPathComponent("output.wav")
+                        let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                        let url = documentsURL.appendingPathComponent("output.wav")
                         playAudio(url)
                     }
                 }
@@ -1052,7 +1052,8 @@ func generate(text: String, cvFile: String, num_steps: Int, language: String) {
     
     let wavData = waveformToWavBytes(audio: combinedWaveform, sampleRate: SAMPLING_RATE)
     
-    let fileURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("output.wav")
+    let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+    let fileURL = documentsURL.appendingPathComponent("output.wav")
 
     do {
         try wavData.write(to: fileURL)
