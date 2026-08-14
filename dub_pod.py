@@ -104,6 +104,7 @@ if __name__ == "__main__":
 
       if subtitles_cn[sub_idx+i].end - subtitles_cn[sub_idx].start < 10: # max 15 sec ref
         text_cn += subtitles_cn[sub_idx+i].text
+        cn_end = subtitles_cn[sub_idx+i].end
         if subtitles_cn[sub_idx+i].start - subtitles_cn[sub_idx+i-1].end > 0:
           text_cn += ", "
         else:
@@ -121,7 +122,8 @@ if __name__ == "__main__":
     print("start =",subtitles_cn[sub_idx].start, "end =",subtitles_cn[sub_idx+i].end)
     new_voice = (subtitles_cn[sub_idx+i].end - subtitles_cn[sub_idx].start) > 5 # min 5 seconds sample
     if new_voice:
-      save_voice_from_audio(start=subtitles_cn[sub_idx].start, end=subtitles_cn[sub_idx+i].end, voice_name="tmp", text=text_cn)
+      print("RORY REF TIME =",cn_end - subtitles_cn[sub_idx].start)
+      save_voice_from_audio(start=subtitles_cn[sub_idx].start, end=cn_end, voice_name="tmp", text=text_cn)
       audio = model.generate(
         text=text_en,
         cv_path="voices/tmp.cv",
@@ -137,26 +139,28 @@ if __name__ == "__main__":
     start_time = subtitles_cn[sub_idx].start
     end_time = subtitles_cn[sub_idx + i].end
 
-    # Output to temp file first
     temp_output = "podcast/podcast_en_temp.wav"
+
+    duration_ms = int(start_time * 1000)
 
     cmd = [
         "ffmpeg",
         "-y",
-        "-i", "podcast/podcast_en.wav",
+        "-i", "podcast/podcast.wav",
         "-i", "outputs/tmp.wav",
         "-filter_complex",
-        f"[0:a]atrim=0:{start_time},asetpts=PTS-STARTPTS[before];"
-        f"[0:a]atrim={end_time},asetpts=PTS-STARTPTS[after];"
-        f"[1:a]apad=whole_dur={end_time - start_time}[replacement];"
-        f"[before][replacement][after]concat=n=3:v=0:a=1[outa]",
+        # Make a silent track with exactly the same duration as podcast.wav
+        "[0:a]volume=0[silence];"
+        # Delay the replacement audio so it starts at start_time
+        f"[1:a]adelay={duration_ms}:all=1[replacement];"
+        # Put replacement audio on top of the silent track
+        "[silence][replacement]amix=inputs=2:duration=first:dropout_transition=0[outa]",
         "-map", "[outa]",
+        "-c:a", "pcm_s16le",
         temp_output
     ]
 
     subprocess.run(cmd, check=True)
-
-    # Replace original with temp file
     os.replace(temp_output, "podcast/podcast_en.wav")
       
     sub_idx+=i
