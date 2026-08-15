@@ -776,9 +776,11 @@ class omni:
     # so c_len doesn't exceed MAX_LEN
     style_tokens = tok.encode(f"<|denoise|><|lang_start|>{language}<|lang_end|><|instruct_start|>None<|instruct_end|>")
     chunks = self.get_chunks(text, ref_text, wav_len, style_tokens, ref_audio_tokens)
+    print("chunks =",chunks)
     res = []
     rets = []
     target_lengths = []
+    total_target_length = self._estimate_target_tokens(text, ref_text, int(wav_len / self.audio_tokenizer.hop_length))
     for i in range(len(chunks)):
       target_length = self._estimate_target_tokens(chunks[i], ref_text, int(wav_len / self.audio_tokenizer.hop_length))
       text_tokens = tok.encode(f"<|text_start|>{' '.join(x.strip() for x in (ref_text, chunks[i]) if x.strip())}<|text_end|>")
@@ -792,9 +794,9 @@ class omni:
       wv = wv[:target_length * self.audio_tokenizer.hop_length]
       res.extend(wv)
     return res
-
+  
   def get_chunks(self, text, ref_text, wav_len, style_tokens, ref_audio_tokens):
-    chunks_small = re.findall(r"[^。，！？；：、.,?]+[。，！？；：、.,?]?", text) # eng and cn gaps
+    chunks_small = re.findall(r"[^。，！？；：、,.?，\(\)\[\]（）【】]+[。，！？；：、,.?，\(\)\[\]（）【】]?", text)
     chunks = [""]
     j = 0
     for i in range(len(chunks_small)):
@@ -804,9 +806,36 @@ class omni:
       if len(style_tokens) + len(text_tokens) + len(ref_audio_tokens[0]) + target_length < MAX_LEN:
         chunks[j] += chunks_small[i]
       else:
-        chunks.append(chunks_small[i])
-        j+=1
-    return chunks
+        single_target_length = self._estimate_target_tokens(chunks_small[i], ref_text, int(wav_len / self.audio_tokenizer.hop_length))
+        single_text_tokens = tok.encode(f"<|text_start|>{' '.join(x.strip() for x in (ref_text, chunks_small[i]) if x.strip())}<|text_end|>")
+        if len(style_tokens) + len(single_text_tokens) + len(ref_audio_tokens[0]) + single_target_length > MAX_LEN:
+          words = chunks_small[i].split()
+          current_chunk = ""
+          for word in words:
+            test_chunk = word if not current_chunk else current_chunk + " " + word
+            test_target_length = self._estimate_target_tokens(test_chunk, ref_text, int(wav_len / self.audio_tokenizer.hop_length))
+            test_text_tokens = tok.encode(f"<|text_start|>{' '.join(x.strip() for x in (ref_text, test_chunk) if x.strip())}<|text_end|>")
+            if len(style_tokens) + len(test_text_tokens) + len(ref_audio_tokens[0]) + test_target_length < MAX_LEN:
+              current_chunk = test_chunk
+            else:
+              if current_chunk:
+                chunks.append(current_chunk)
+                j += 1
+              current_chunk = word
+          if current_chunk:
+            chunks.append(current_chunk)
+            j += 1
+        else:
+          chunks.append(chunks_small[i])
+          j += 1
+    return [x for x in chunks if x]
+
+  def _estimate_target_tokens(self, text, ref_text, num_ref_audio_tokens):
+    ref_weight = sum(CHAR_WEIGHTS[ord(c)] for c in ref_text)
+    speed_factor = ref_weight / num_ref_audio_tokens
+    target_weight = sum(CHAR_WEIGHTS[ord(c)] for c in text)
+    estimated_duration = target_weight / speed_factor
+    return int(estimated_duration)
 
   def expand_wav(self, ref_wav):
     chunk_size = self.audio_tokenizer.hop_length
@@ -829,13 +858,6 @@ class omni:
     embeddings = self.audio_tokenizer.fc(embeddings.transpose(1, 2)).transpose(1, 2)
     audio_codes = self.audio_tokenizer.quantizer.encode(embeddings)
     return audio_codes.transpose(0, 1)
-
-  def _estimate_target_tokens(self, text, ref_text, num_ref_audio_tokens):
-    ref_weight = sum(CHAR_WEIGHTS[ord(c)] for c in ref_text)
-    speed_factor = ref_weight / num_ref_audio_tokens
-    target_weight = sum(CHAR_WEIGHTS[ord(c)] for c in text)
-    estimated_duration = target_weight / speed_factor
-    return int(estimated_duration)
 
   @TinyJit
   def __call__(self, input_ids, audio_mask, attention_mask, tokens, c_len_var, t_len_var):
