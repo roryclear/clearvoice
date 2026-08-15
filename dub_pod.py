@@ -49,6 +49,20 @@ def parse_srt_file(file):
       if timestamp_line:
         start, end = timestamp_line.split(" --> ")
         text = '\n'.join(text_lines).strip()
+        text = re.sub(
+          r'\([^)]*\)|'
+          r'\[[^\]]*\]|'
+          r'\{[^}]*\}|'
+          r'（[^）]*）|'
+          r'［[^］]*］|'
+          r'｛[^｝]*｝|'
+          r'「[^」]*」|'
+          r'『[^』]*』',
+          '',
+          text
+        )
+        text = re.sub(r'\s+', ' ', text).strip()
+
         subtitles.append(Subtitle(text=text, start=timestamp_to_seconds(start.strip()), end=timestamp_to_seconds(end.strip())))
   
     return subtitles
@@ -87,8 +101,18 @@ if __name__ == "__main__":
   '''
   #exit()
 
+  subprocess.run([
+      "ffmpeg",
+      "-y",
+      "-i", "podcast/podcast_en.wav",
+      "-af", "volume=0",
+      "-c:a", "pcm_s16le",
+      "podcast/podcast_en_temp.wav"
+  ], check=True)
+  os.replace("podcast/podcast_en_temp.wav", "podcast/podcast_en.wav")
+
   # for now manually just say when speaker changes...
-  voice_changes = [94, 158, 166]
+  voice_changes = [95 , 158, 166]
   host = True
   time = 86 # skip into
   change_idx = 0
@@ -146,15 +170,13 @@ if __name__ == "__main__":
     cmd = [
         "ffmpeg",
         "-y",
-        "-i", "podcast/podcast.wav",
+        "-i", "podcast/podcast_en.wav",
         "-i", "outputs/tmp.wav",
         "-filter_complex",
-        # Make a silent track with exactly the same duration as podcast.wav
-        "[0:a]volume=0[silence];"
-        # Delay the replacement audio so it starts at start_time
-        f"[1:a]adelay={duration_ms}:all=1[replacement];"
-        # Put replacement audio on top of the silent track
-        "[silence][replacement]amix=inputs=2:duration=first:dropout_transition=0[outa]",
+        # Delay tmp.wav until start_time
+        f"[1:a]adelay={duration_ms}:all=1[overlay];"
+        # Mix it on top of the existing podcast_en.wav
+        "[0:a][overlay]amix=inputs=2:duration=first:dropout_transition=0[outa]",
         "-map", "[outa]",
         "-c:a", "pcm_s16le",
         temp_output
@@ -163,7 +185,7 @@ if __name__ == "__main__":
     subprocess.run(cmd, check=True)
     os.replace(temp_output, "podcast/podcast_en.wav")
       
-    sub_idx+=i
+    sub_idx+=i+1
     change_idx+=1
     host = not host
 
