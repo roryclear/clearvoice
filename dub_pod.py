@@ -112,7 +112,7 @@ if __name__ == "__main__":
   os.replace("podcast/podcast_en_temp.wav", "podcast/podcast_en.wav")
 
   # for now manually just say when speaker changes...
-  voice_changes = [95 , 158, 166]
+  voice_changes = [95 , 158, 166, 221]
   host = True
   time = 86 # skip into
   change_idx = 0
@@ -162,6 +162,22 @@ if __name__ == "__main__":
     # slop ffmpeg normally is ok...
     start_time = subtitles_cn[sub_idx].start
     end_time = subtitles_cn[sub_idx + i].end
+
+    # speed up or slow down to fit sub duration
+    actual_duration = len(audio) / SAMPLING_RATE
+    start_time = subtitles_cn[sub_idx].start
+    end_time = subtitles_cn[sub_idx + i].end
+    target_duration = end_time - start_time
+    speed = actual_duration / target_duration
+    with open("outputs/tmp.wav", "wb") as f:
+        f.write(waveform_to_wav_bytes(audio, SAMPLING_RATE))
+    subprocess.run([
+        "ffmpeg", "-y",
+        "-i", "outputs/tmp.wav",
+        "-filter:a", f"atempo={speed}",
+        "outputs/tmp2.wav"
+    ], check=True)
+    os.replace("outputs/tmp2.wav", "outputs/tmp.wav")
 
     temp_output = "podcast/podcast_en_temp.wav"
 
