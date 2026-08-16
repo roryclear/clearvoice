@@ -90,8 +90,8 @@ class SimpleTokenizer:
   def is_end(self, token_id:int) -> bool: return token_id in (self.eos_id, self.eot_id)
   
 # ios needs to be like 500 max_len and 15s ref len for RAM
-MAX_LEN = 1000
-REF_AUDIO_LEN = 15
+MAX_LEN = 500
+REF_AUDIO_LEN = 10
 FRAME_RATE = 25
 AUDIO_CHUNK_DURATION = 15.0
 POSITION_TEMP = 5.0
