@@ -143,17 +143,30 @@ if __name__ == "__main__":
   '''
 
   # for now manually just say when speaker changes...english srt! use first num after
-  voice_changes = [42, 74, 81, 112, 116, 120, 121, 131, 133, 139, 140, 147]
-  host = True
+  # for start now use host = False, and add the start of pod to start of voice_changes
+  voice_changes = [38, 42, 74, 81, 112, 116, 120, 121, 131, 133, 139, 140, 147]
+  host = False
   time = 86 # skip intro
   change_idx = 0
   sub_idx = 0
-  while subtitles_en[sub_idx].start < time: sub_idx += 1
-  #while sub_idx < len(subtitles_cn):
+
+  #time = (4*60) + 12 + 0.385
+  subprocess.run([
+      "ffmpeg",
+      "-y",
+      "-i", "podcast/podcast_en.wav",
+      "-af", f"volume=enable='gte(t,{time})':volume=0",
+      "-c:a", "pcm_s16le",
+      "podcast/podcast_en_temp.wav"
+  ], check=True)
+  os.replace("podcast/podcast_en_temp.wav", "podcast/podcast_en.wav")
+
+
   while subtitles_en[sub_idx].number < voice_changes[-1]:
     text_cn = subtitles_cn[sub_idx].text
     text_en = subtitles_en[sub_idx].text
     i = 1
+    print(subtitles_en[sub_idx+i].number, voice_changes[change_idx]-1, "HERE RORY")
     while subtitles_en[sub_idx+i].number < voice_changes[change_idx]-1: # todo, en and cn are different but it should be ok lol
       if subtitles_en[sub_idx+i].end - subtitles_en[sub_idx].start < 10 and subtitles_en[sub_idx+i].start < subtitles_en[voice_changes[change_idx]-1].start: # max 15 sec ref
         text_cn += subtitles_cn[sub_idx+i].text
@@ -173,7 +186,11 @@ if __name__ == "__main__":
       i+=1
     print(text_cn, "\n", text_en)
     print("start =",subtitles_cn[sub_idx].start, "end =",subtitles_cn[sub_idx+i].end)
-
+    if subtitles_cn[sub_idx].start < time:
+      sub_idx+=i
+      change_idx+=1
+      host = not host
+      continue
     new_voice = (subtitles_cn[sub_idx+i].end - subtitles_cn[sub_idx].start) > 5 # min 5 seconds sample
     if subtitles_en[sub_idx].number > 42 and subtitles_en[sub_idx].number < 74: new_voice = False # broken bit because guest talks a little
     if new_voice:
@@ -226,7 +243,7 @@ if __name__ == "__main__":
         "-i", "outputs/tmp.wav",
         "-filter_complex",
         f"[1:a]adelay={duration_ms}:all=1[overlay];"
-        "[0:a][overlay]amix=inputs=2:duration=first:dropout_transition=0[outa]",
+        "[0:a][overlay]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[outa]",
         "-map", "[outa]",
         "-c:a", "pcm_s16le",
         temp_output
