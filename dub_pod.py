@@ -2,7 +2,7 @@ from clearvoice import omni, waveform_to_wav_bytes, SAMPLING_RATE, save_voice
 import subprocess, os
 
 def save_audio(start, end):
-  os.remove("tmp.wav") if os.path.exists("tmp.wav") else None
+  if os.path.exists("tmp.wav"): os.remove("tmp.wav")
   subprocess.run(["ffmpeg", "-ss", str(start), "-to", str(end), "-i", "podcast/podcast.mp4", "-vn", "-acodec", "pcm_s16le", "tmp.wav"])
 
 def save_voice_from_audio(start, end, voice_name, text):
@@ -84,6 +84,7 @@ if __name__ == "__main__":
   subtitles_cn = parse_srt_file("podcast/chinese.srt")
 
   # manual fixes for now, auto generate warning thing and some chinese subs are split in two vs english, n^2 don't care
+  # todo just rewrite the cn srt so it matches
   for i in range(len(subtitles_en)): subtitles_en[i].number -= 1
   while len(subtitles_cn) != len(subtitles_en):
     for i in range(len(subtitles_en)):
@@ -102,8 +103,8 @@ if __name__ == "__main__":
   print(len(subtitles_en), len(subtitles_cn))
   model = omni()
   
-  save_voice_from_audio(start="00:05:35.5", end="00:05:47.5", voice_name="host",
-                        text="因为那个顺雨他之前在去年的时候说, AI进入了the second half, 进入了下半场这个成为了一个非常有名的观点, 你觉得今天的AI在一个什么样的时期, 你能给它一个定义吗")
+  save_voice_from_audio(start="00:05:35.5", end="00:05:44.0", voice_name="host",
+                        text="因为那个顺雨他之前在去年的时候说, AI进入了the second half, 进入了下半场这个成为了一个非常有名的观点")
   '''
   audio = model.generate(
     text="hello, this is the host of the podcast speaking english now, can you understand me or not? thank you for listening.",
@@ -115,8 +116,8 @@ if __name__ == "__main__":
   '''
   
 
-  save_voice_from_audio(start="00:08:55", end="00:09:09", voice_name="guest",
-                        text="我觉得呢, 其实是有意愿的成分在的, 尤其在过去的情况下主要是意愿, 就是当大家能从纸面上就看出区别的时候, 那时候意愿肯定是占大多数的")
+  save_voice_from_audio(start="00:01:35.161", end="00:01:42.669", voice_name="guest",
+                        text="啊 可以 对，就是我叫姚顺宇然后显然也有一个跟我几乎同名的朋友")
   '''
   audio = model.generate(
     text="hello, this is the guest of the podcast speaking english now, can you understand me or not? thank you for listening.",
@@ -126,9 +127,10 @@ if __name__ == "__main__":
   )
   with open("outputs/guest_test.wav", "wb") as f: f.write(waveform_to_wav_bytes(audio, SAMPLING_RATE))
   '''
-  
   #exit()
 
+  # reset output file
+  '''
   subprocess.run([
       "ffmpeg",
       "-y",
@@ -138,9 +140,10 @@ if __name__ == "__main__":
       "podcast/podcast_en_temp.wav"
   ], check=True)
   os.replace("podcast/podcast_en_temp.wav", "podcast/podcast_en.wav")
+  '''
 
   # for now manually just say when speaker changes...english srt! use first num after
-  voice_changes = [42, 74, 81, 112, 116, 120, 121, 131]
+  voice_changes = [42, 74, 81, 112, 116, 120, 121, 131, 133, 139, 140, 147]
   host = True
   time = 86 # skip intro
   change_idx = 0
@@ -172,13 +175,14 @@ if __name__ == "__main__":
     print("start =",subtitles_cn[sub_idx].start, "end =",subtitles_cn[sub_idx+i].end)
 
     new_voice = (subtitles_cn[sub_idx+i].end - subtitles_cn[sub_idx].start) > 5 # min 5 seconds sample
+    if subtitles_en[sub_idx].number > 42 and subtitles_en[sub_idx].number < 74: new_voice = False # broken bit because guest talks a little
     if new_voice:
       voice = "voices/tmp.cv"
+      save_voice_from_audio(start=subtitles_cn[sub_idx].start, end=cn_end, voice_name="tmp", text=text_cn)
     else:
       print("TOO SHORT?", host)
       voice = "voices/host.cv" if host else "voices/guest.cv"
 
-    save_voice_from_audio(start=subtitles_cn[sub_idx].start, end=cn_end, voice_name="tmp", text=text_cn)
     audio = model.generate(
       text=text_en,
       cv_path=voice,
@@ -187,19 +191,19 @@ if __name__ == "__main__":
     )
     with open("outputs/tmp.wav", "wb") as f: f.write(waveform_to_wav_bytes(audio, SAMPLING_RATE))
 
-    # slop ffmpeg normally is ok...
     start_time = subtitles_cn[sub_idx].start
-    end_time = subtitles_cn[sub_idx + i].end
-
-    # speed up or slow down to fit sub duration
-    actual_duration = len(audio) / SAMPLING_RATE
-    start_time = subtitles_cn[sub_idx].start
-    end_time = subtitles_cn[sub_idx + i].end
+    end_time = subtitles_cn[sub_idx+i-1].end
     target_duration = end_time - start_time
+
+    wav_bytes = waveform_to_wav_bytes(audio, SAMPLING_RATE)
+    actual_duration = len(audio) / SAMPLING_RATE
+
     speed = actual_duration / target_duration
-    if speed > 0.7 and speed < 1.7:
+    if speed > 0.7 and speed < 1.3:
       with open("outputs/tmp.wav", "wb") as f:
-          f.write(waveform_to_wav_bytes(audio, SAMPLING_RATE))
+          f.write(wav_bytes)
+      
+      # Apply atempo
       subprocess.run([
           "ffmpeg", "-y",
           "-i", "outputs/tmp.wav",
@@ -207,20 +211,21 @@ if __name__ == "__main__":
           "outputs/tmp2.wav"
       ], check=True)
       os.replace("outputs/tmp2.wav", "outputs/tmp.wav")
+      
+      actual_duration = target_duration
+    else:
+      with open("outputs/tmp.wav", "wb") as f:
+          f.write(wav_bytes)
 
+    duration_ms = max(0, int((start_time * 1000)))
     temp_output = "podcast/podcast_en_temp.wav"
-
-    duration_ms = int(start_time * 1000)
-
     cmd = [
         "ffmpeg",
         "-y",
         "-i", "podcast/podcast_en.wav",
         "-i", "outputs/tmp.wav",
         "-filter_complex",
-        # Delay tmp.wav until start_time
         f"[1:a]adelay={duration_ms}:all=1[overlay];"
-        # Mix it on top of the existing podcast_en.wav
         "[0:a][overlay]amix=inputs=2:duration=first:dropout_transition=0[outa]",
         "-map", "[outa]",
         "-c:a", "pcm_s16le",
