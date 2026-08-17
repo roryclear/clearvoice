@@ -1,5 +1,7 @@
 from clearvoice import omni, waveform_to_wav_bytes, SAMPLING_RATE, save_voice, REF_AUDIO_LEN
-import subprocess, os
+import subprocess, os, math
+
+MAX_REF_AUDIO_LEN=15
 
 def save_audio(start, end):
   if os.path.exists("tmp.wav"): os.remove("tmp.wav")
@@ -99,7 +101,6 @@ if __name__ == "__main__":
     if subtitles_cn[i].end != subtitles_en[i].end:
       subtitles_cn[i].end = min(subtitles_cn[i].end, subtitles_en[i].end)
       subtitles_en[i].end = subtitles_cn[i].end
-
   # check fix worked:
   #for i in range(len(subtitles_en)):
   #  print("rory i=",i)
@@ -149,9 +150,10 @@ if __name__ == "__main__":
 
   # for now manually just say when speaker changes...english srt! use first num after
   # for start now use host = False, and add the start of pod to start of voice_changes
-  voice_changes = [38, 42, 74, 81, 112, 116, 120, 121, 131, 133, 139, 140, 147]
+  voice_changes = [38, 42, 74, 81, 112, 116, 120, 121, 131, 133, 139, 140, 147, 148, 172, 175, 180, 188, 224, 230, 234, 278, 282]
   host = False
   time = 86 # skip intro
+  #time = 4*60 + 34 + 0.140
   change_idx = 0
   sub_idx = 0
 
@@ -173,7 +175,7 @@ if __name__ == "__main__":
     i = 1
     print(subtitles_en[sub_idx+i].number, voice_changes[change_idx]-1, "HERE RORY")
     while subtitles_en[sub_idx+i].number < voice_changes[change_idx]-1: # todo, en and cn are different but it should be ok lol
-      if subtitles_en[sub_idx+i].end - subtitles_en[sub_idx].start < REF_AUDIO_LEN and subtitles_en[sub_idx+i].start < subtitles_en[voice_changes[change_idx]-1].start: # max 15 sec ref
+      if subtitles_en[sub_idx+i].end - subtitles_en[sub_idx].start < MAX_REF_AUDIO_LEN and subtitles_en[sub_idx+i].start < subtitles_en[voice_changes[change_idx]-1].start: # max 15 sec ref
         text_cn += subtitles_cn[sub_idx+i].text
         cn_end = subtitles_en[sub_idx+i].end
         if subtitles_en[sub_idx+i].start - subtitles_en[sub_idx+i-1].end > 0:
@@ -209,7 +211,7 @@ if __name__ == "__main__":
       text=text_en,
       cv_path=voice,
       num_steps=32,
-      language="en"
+      language="en",
     )
     with open("outputs/tmp.wav", "wb") as f: f.write(waveform_to_wav_bytes(audio, SAMPLING_RATE))
 
