@@ -1,4 +1,4 @@
-from clearvoice import omni, waveform_to_wav_bytes, SAMPLING_RATE, save_voice
+from clearvoice import omni, waveform_to_wav_bytes, SAMPLING_RATE, save_voice, REF_AUDIO_LEN
 import subprocess, os
 
 def save_audio(start, end):
@@ -168,7 +168,7 @@ if __name__ == "__main__":
     i = 1
     print(subtitles_en[sub_idx+i].number, voice_changes[change_idx]-1, "HERE RORY")
     while subtitles_en[sub_idx+i].number < voice_changes[change_idx]-1: # todo, en and cn are different but it should be ok lol
-      if subtitles_en[sub_idx+i].end - subtitles_en[sub_idx].start < 10 and subtitles_en[sub_idx+i].start < subtitles_en[voice_changes[change_idx]-1].start: # max 15 sec ref
+      if subtitles_en[sub_idx+i].end - subtitles_en[sub_idx].start < REF_AUDIO_LEN and subtitles_en[sub_idx+i].start < subtitles_en[voice_changes[change_idx]-1].start: # max 15 sec ref
         text_cn += subtitles_cn[sub_idx+i].text
         cn_end = subtitles_en[sub_idx+i].end
         if subtitles_en[sub_idx+i].start - subtitles_en[sub_idx+i-1].end > 0:
