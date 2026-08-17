@@ -9,6 +9,7 @@ import SwiftUI
 import Foundation
 internal import Combine
 import AVFoundation
+import StoreKit
 
 let device = MTLCreateSystemDefaultDevice()!
 let queue = device.makeCommandQueue()!
@@ -722,6 +723,9 @@ struct ContentView: View {
                     .scaledToFit()
                     .clipShape(RoundedRectangle(cornerRadius: 25))
                     .frame(width: 120, height: 120)
+                #if os(macOS)
+                DonateButton()
+                #endif
                 
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Enter Text:")
@@ -865,6 +869,11 @@ struct ContentView: View {
             .padding()
             .navigationTitle("ClearVoice")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    DonateButton()
+                }
+            }
             #endif
         }
     }
@@ -1451,6 +1460,79 @@ func estimateTargetTokens(text: String, refText: String, numRefAudioTokens: Int,
     return Int(estimatedDuration)
 }
 
-
-
-
+struct DonateButton: View {
+    @State private var products: [Product] = []
+    @State private var isPurchasing = false
+    @State private var purchaseComplete = false
+    @State private var errorMessage: String?
+    
+    var body: some View {
+        Button(action: {
+            Task {
+                await loadAndPurchase()
+            }
+        }) {
+            if isPurchasing {
+                ProgressView()
+                    .frame(width: 60, height: 30)
+            } else {
+                Text("Donate")
+                    .foregroundColor(.blue)
+            }
+        }
+        .disabled(isPurchasing)
+        .task {
+            await listenForTransactions()
+        }
+        .alert("Purchase Complete", isPresented: $purchaseComplete) {
+            Button("Continue", role: .cancel) {}
+        } message: {
+            Text("Thank you for your support!")
+        }
+        .alert("Error", isPresented: .constant(errorMessage != nil)) {
+            Button("OK") { errorMessage = nil }
+        } message: {
+            Text(errorMessage ?? "")
+        }
+    }
+    
+    func listenForTransactions() async {
+        for await update in Transaction.updates {
+            if case .verified(let transaction) = update {
+                purchaseComplete = true
+                await transaction.finish()
+            }
+        }
+    }
+    
+    func loadAndPurchase() async {
+        isPurchasing = true
+        defer { isPurchasing = false }
+        do {
+            let products = try await Product.products(for: ["donate"])
+            guard let product = products.first else {
+                errorMessage = "Product not found"
+                return
+            }
+            let result = try await product.purchase()
+            switch result {
+            case .success(let verification):
+                switch verification {
+                case .verified(let transaction):
+                    purchaseComplete = true
+                    await transaction.finish()
+                case .unverified:
+                    errorMessage = "Transaction verification failed"
+                }
+            case .userCancelled:
+                break
+            case .pending:
+                errorMessage = "Purchase pending"
+            @unknown default:
+                break
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+}
