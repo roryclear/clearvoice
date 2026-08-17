@@ -92,7 +92,13 @@ if __name__ == "__main__":
         subtitles_cn[i-1].text += " " + subtitles_cn[i].text
         subtitles_cn[i-1].end = subtitles_cn[i].end
         subtitles_cn.pop(i)
-        break 
+        break
+
+  # use lower end if they don't match
+  for i in range(len(subtitles_en)):
+    if subtitles_cn[i].end != subtitles_en[i].end:
+      subtitles_cn[i].end = min(subtitles_cn[i].end, subtitles_en[i].end)
+      subtitles_en[i].end = subtitles_cn[i].end
 
   # check fix worked:
   #for i in range(len(subtitles_en)):
@@ -100,7 +106,6 @@ if __name__ == "__main__":
   #  print(subtitles_en[i], subtitles_cn[i])
   #  assert [subtitles_en[i].start, subtitles_en[i].end] == [subtitles_cn[i].start, subtitles_cn[i].end]
 
-  print(len(subtitles_en), len(subtitles_cn))
   model = omni()
   
   save_voice_from_audio(start="00:05:35.5", end="00:05:44.0", voice_name="host",
