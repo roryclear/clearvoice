@@ -154,14 +154,13 @@ if __name__ == "__main__":
 
   # for now manually just say when speaker changes...english srt! use first num after
   # for start now use host = False, and add the start of pod to start of voice_changes
-  voice_changes = [38, 42, 74, 81, 112, 116, 120, 121, 131, 133, 139, 140, 147, 148, 172, 175, 180, 188, 224, 230, 234, 278, 282]
+  voice_changes = [38, 42, 74, 81, 112, 116, 120, 121, 131, 133, 139, 140, 147, 148, 172, 175, 180, 188, 224, 230, 234, 235, 263, 278, 282, 291, 292, 317, 318, 323, 324, 350, 355, 356, 359, 362, 363, 367, 368, 389, 394, 398, 401]
   host = False
   time = 86 # skip intro
-  #time = 4*60 + 34 + 0.140
+  time = 7*60 + 20 + 0.840
   change_idx = 0
   sub_idx = 0
 
-  #time = (4*60) + 12 + 0.385
   subprocess.run([
       "ffmpeg",
       "-y",
