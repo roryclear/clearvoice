@@ -9,8 +9,7 @@ def save_audio(start, end):
 
 def save_voice_from_audio(start, end, voice_name, text):
   save_audio(start=start, end=end)
-  save_voice(audio="tmp.wav", voice_name=voice_name,
-             text=text)
+  save_voice(audio="tmp.wav", voice_name=voice_name, text=text)
 
 from dataclasses import dataclass
 import re
@@ -155,9 +154,9 @@ if __name__ == "__main__":
   # for now manually just say when speaker changes...english srt! use first num after
   # for start now use host = False, and add the start of pod to start of voice_changes
   voice_changes = [38, 42, 74, 81, 112, 116, 120, 121, 131, 133, 139, 140, 147, 148, 172, 175, 180, 188, 224, 230, 234, 235, 263, 278, 282, 291, 292, 317, 318, 323, 324, 350, 355, 356, 359, 362, 363, 367, 368, 389, 394, 398, 401]
-  host = False
+  host = True
   time = 86 # skip intro
-  time = 7*60 + 20 + 0.840
+  time = 10*60 +16 + 0.282 
   change_idx = 0
   sub_idx = 0
 
@@ -203,6 +202,7 @@ if __name__ == "__main__":
       continue
     new_voice = (subtitles_cn[sub_idx+i].end - subtitles_cn[sub_idx].start) > 5 # min 5 seconds sample
     if subtitles_en[sub_idx].number > 42 and subtitles_en[sub_idx].number < 74: new_voice = False # broken bit because guest talks a little
+    if subtitles_cn[sub_idx].start >= cn_end: new_voice = False
     if new_voice:
       voice = "voices/tmp.cv"
       save_voice_from_audio(start=subtitles_cn[sub_idx].start, end=cn_end, voice_name="tmp", text=text_cn)
