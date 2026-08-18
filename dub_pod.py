@@ -72,6 +72,10 @@ def parse_srt_file(file):
       )
       text = re.sub(r'\s+', ' ', text).strip()
 
+      # remove laughing hahahas in en and cn
+      text = re.sub(r'(?:ha){2,}', '', text, flags=re.IGNORECASE)
+      text = re.sub(r'(?:ha){2,}|哈{2,}', '', text, flags=re.IGNORECASE)
+
       subtitles.append(Subtitle(
         number=subtitle_number,
         text=text, 
