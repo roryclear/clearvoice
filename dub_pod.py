@@ -112,30 +112,28 @@ if __name__ == "__main__":
 
   model = omni()
   
-  save_voice_from_audio(start="00:05:35.5", end="00:05:44.0", voice_name="host",
+  save_voice_from_audio(start="00:05:35.5", end="00:05:44.0", voice_name="0",
                         text="因为那个顺雨他之前在去年的时候说, AI进入了the second half, 进入了下半场这个成为了一个非常有名的观点")
-  '''
+  
   audio = model.generate(
-    text="hello, this is the host of the podcast speaking english now, can you understand me or not? thank you for listening.",
-    cv_path="voices/host.cv",
+    text=f"hello, this is speaker {0} speaking english now, can you understand me or not? thank you for listening.",
+    cv_path=f"voices/{0}.cv",
     num_steps=32,
     language="en"
   )
-  with open("outputs/host_test.wav", "wb") as f: f.write(waveform_to_wav_bytes(audio, SAMPLING_RATE))
-  '''
+  with open(f"outputs/{0}_test.wav", "wb") as f: f.write(waveform_to_wav_bytes(audio, SAMPLING_RATE))
+  
   
 
-  save_voice_from_audio(start="00:01:35.161", end="00:01:42.669", voice_name="guest",
+  save_voice_from_audio(start="00:01:35.161", end="00:01:42.669", voice_name="1",
                         text="啊 可以 对，就是我叫姚顺宇然后显然也有一个跟我几乎同名的朋友")
-  '''
   audio = model.generate(
-    text="hello, this is the guest of the podcast speaking english now, can you understand me or not? thank you for listening.",
-    cv_path="voices/guest.cv",
+    text=f"hello, this is speaker {1} speaking english now, can you understand me or not? thank you for listening.",
+    cv_path=f"voices/{1}.cv",
     num_steps=32,
     language="en"
   )
-  with open("outputs/guest_test.wav", "wb") as f: f.write(waveform_to_wav_bytes(audio, SAMPLING_RATE))
-  '''
+  with open(f"outputs/{1}_test.wav", "wb") as f: f.write(waveform_to_wav_bytes(audio, SAMPLING_RATE))
   #exit()
 
   # reset output file
@@ -153,10 +151,12 @@ if __name__ == "__main__":
 
   # for now manually just say when speaker changes...english srt! use first num after
   # for start now use host = False, and add the start of pod to start of voice_changes
-  voice_changes = [38, 42, 74, 81, 112, 116, 120, 121, 131, 133, 139, 140, 147, 148, 172, 175, 180, 188, 224, 230, 234, 235, 263, 278, 282, 291, 292, 317, 318, 323, 324, 350, 355, 356, 359, 362, 363, 367, 368, 389, 394, 398, 401]
-  host = True
+  voice_changes = [38, 42, 74, 81, 112, 116, 120, 121, 131, 133, 139, 140, 147, 148, 172, 175, 180, 188, 224, 230, 234, 235, 263, 278, 282, 291, 292, 317, 318, 323, 324, 350, 355, 356, 359, 362, 363, 367, 368, 389, 394, 398, 401,
+                  420, 421, 427, 428, 432, 433, 448, 454, 469, 476, 500, 502, 523, 530, 547, 548, 579, 580, 598, 599, 602, 605, 612, 613, 614, 616, 621, 623, 632, 635, 637, 638, 641, 642, 652, 653, 675, 678, 680, 697, 722, 728,
+                  759, 760, 771, 774, 775, 777, 800, 802, 807, 809, 827, 829, 834, 835, 851, 852, 861, 862, 885, 886, 891, 893, 914, 915, 918, 920, 921, 930, 939, 940, 955, 961, 965]
+  speaker = 1
   time = 86 # skip intro
-  time = 10*60 +16 + 0.282 
+  #time = 28*60 + 51 + 0.229
   change_idx = 0
   sub_idx = 0
 
@@ -175,7 +175,7 @@ if __name__ == "__main__":
     text_cn = subtitles_cn[sub_idx].text
     text_en = subtitles_en[sub_idx].text
     i = 1
-    print(subtitles_en[sub_idx+i].number, voice_changes[change_idx]-1, "HERE RORY")
+    print(subtitles_en[sub_idx+i].number, voice_changes[change_idx]-1, "HERE RORY", "speaker =",speaker)
     while subtitles_en[sub_idx+i].number < voice_changes[change_idx]-1: # todo, en and cn are different but it should be ok lol
       if subtitles_en[sub_idx+i].end - subtitles_en[sub_idx].start < MAX_REF_AUDIO_LEN and subtitles_en[sub_idx+i].start < subtitles_en[voice_changes[change_idx]-1].start: # max 15 sec ref
         text_cn += subtitles_cn[sub_idx+i].text
@@ -198,7 +198,7 @@ if __name__ == "__main__":
     if subtitles_cn[sub_idx].start < time:
       sub_idx+=i
       change_idx+=1
-      host = not host
+      speaker = (speaker + 1) % 2 # todo, unhardcode number of speakers
       continue
     new_voice = (subtitles_cn[sub_idx+i].end - subtitles_cn[sub_idx].start) > 5 # min 5 seconds sample
     if subtitles_en[sub_idx].number > 42 and subtitles_en[sub_idx].number < 74: new_voice = False # broken bit because guest talks a little
@@ -207,8 +207,8 @@ if __name__ == "__main__":
       voice = "voices/tmp.cv"
       save_voice_from_audio(start=subtitles_cn[sub_idx].start, end=cn_end, voice_name="tmp", text=text_cn)
     else:
-      print("TOO SHORT?", host)
-      voice = "voices/host.cv" if host else "voices/guest.cv"
+      print("TOO SHORT?", speaker)
+      voice = f"voices/{speaker}.cv"
 
     audio = model.generate(
       text=text_en,
@@ -226,23 +226,21 @@ if __name__ == "__main__":
     actual_duration = len(audio) / SAMPLING_RATE
 
     speed = actual_duration / target_duration
-    if speed > 0.7 and speed < 1.3:
-      with open("outputs/tmp.wav", "wb") as f:
-          f.write(wav_bytes)
-      
-      # Apply atempo
-      subprocess.run([
-          "ffmpeg", "-y",
-          "-i", "outputs/tmp.wav",
-          "-filter:a", f"atempo={speed}",
-          "outputs/tmp2.wav"
-      ], check=True)
-      os.replace("outputs/tmp2.wav", "outputs/tmp.wav")
-      
-      actual_duration = target_duration
-    else:
-      with open("outputs/tmp.wav", "wb") as f:
-          f.write(wav_bytes)
+    with open("outputs/tmp.wav", "wb") as f:
+        f.write(wav_bytes)
+    
+    # Apply atempo
+    speed = max(speed, 0.5)
+    subprocess.run([
+        "ffmpeg", "-y",
+        "-i", "outputs/tmp.wav",
+        "-filter:a", f"atempo={speed}",
+        "outputs/tmp2.wav"
+    ], check=True)
+    os.replace("outputs/tmp2.wav", "outputs/tmp.wav")
+    
+    actual_duration = target_duration
+
 
     duration_ms = max(0, int((start_time * 1000)))
     temp_output = "podcast/podcast_en_temp.wav"
@@ -263,5 +261,5 @@ if __name__ == "__main__":
 
     sub_idx+=i
     change_idx+=1
-    host = not host
+    speaker = (speaker + 1) % 2 # todo unhardcode
   print("here")
