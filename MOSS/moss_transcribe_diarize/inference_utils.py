@@ -62,15 +62,6 @@ def dtype_from_name(name: str) -> torch.dtype:
         raise ValueError(f"Unsupported dtype: {name}") from exc
 
 
-def resolve_device(device: str) -> torch.device:
-    if device == "auto":
-        device = "cuda:0" if torch.cuda.is_available() else "cpu"
-    resolved = torch.device(device)
-    if resolved.type == "cuda" and not torch.cuda.is_available():
-        return torch.device("cpu")
-    return resolved
-
-
 def _is_likely_video_path(path: str) -> bool:
     return Path(path.split("?", 1)[0]).suffix.lower() in VIDEO_EXTENSIONS
 
@@ -167,7 +158,6 @@ def prepare_inputs(processor, messages, *, max_length: int = 131072, device: tor
         audio_kwargs=audio_kwargs,
         return_tensors="pt",
     )
-
 
 def generate_transcription(
     model,
