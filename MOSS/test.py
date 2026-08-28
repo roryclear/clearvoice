@@ -88,26 +88,9 @@ def load_audio_av(audio: str, sampling_rate: int) -> np.ndarray:
         raise ValueError(f"No decodable audio samples found in {audio!r}.")
     return (np.concatenate(chunks).astype(np.float32) / 32768.0).astype(np.float32, copy=False)
 
-
-def _is_likely_video_path(path: str) -> bool:
-    return Path(path.split("?", 1)[0]).suffix.lower() in VIDEO_EXTENSIONS
-
 def load_audio_item(audio: str | np.ndarray, sampling_rate: int) -> np.ndarray:
-    """Load audio with Transformers' loader, using PyAV for media containers."""
-    if isinstance(audio, str) and _is_likely_video_path(audio):
-        return load_audio_av(audio, sampling_rate=sampling_rate)
-    try:
-        return load_audio(audio, sampling_rate=sampling_rate)
-    except Exception as exc:
-        if not isinstance(audio, str):
-            raise
-        try:
-            return load_audio_av(audio, sampling_rate=sampling_rate)
-        except Exception as av_exc:
-            raise RuntimeError(
-                f"Failed to load audio {audio!r} with transformers.audio_utils.load_audio or PyAV."
-            ) from av_exc
-
+    return load_audio(audio, sampling_rate=sampling_rate)
+    
 def process_audio_info(messages: list[dict[str, Any]], sampling_rate: int):
     """Load audio items from chat messages in the same order as the template."""
     audios = []
