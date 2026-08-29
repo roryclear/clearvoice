@@ -111,6 +111,7 @@ if __name__ == "__main__":
   #  assert [subtitles_en[i].start, subtitles_en[i].end] == [subtitles_cn[i].start, subtitles_cn[i].end]
 
   model = omni()
+  '''
   save_voice_from_audio(start="00:05:35.5", end="00:05:44.0", voice_name="1",
                         text="因为那个顺雨他之前在去年的时候说, AI进入了the second half, 进入了下半场这个成为了一个非常有名的观点")
   
@@ -133,7 +134,7 @@ if __name__ == "__main__":
     language="en"
   )
   with open(f"outputs/{2}_test.wav", "wb") as f: f.write(waveform_to_wav_bytes(audio, SAMPLING_RATE))
-
+  '''
   #exit()
 
   # reset output file
@@ -170,5 +171,37 @@ if __name__ == "__main__":
   ], check=True)
   os.replace("podcast/podcast_en_temp.wav", "podcast/podcast_en.wav")
 
+
+  sub_idx = 0
+  speaker_idx = 0
+  time = voice_changes[speaker_idx]
+  use_voice = True
+  while subtitles_en[sub_idx].start < voice_changes[-1]:
+    use_voice = (voice_changes[speaker_idx+1] - voice_changes[speaker_idx]) > 5
+    cn_str = ""
+    if use_voice:
+      n_subs = 0
+      while subtitles_cn[sub_idx+n_subs].end - subtitles_cn[sub_idx].start < 15 and subtitles_en[sub_idx+n_subs].start < voice_changes[speaker_idx]-0.1:
+        if n_subs > 0:
+          if subtitles_cn[sub_idx+n_subs].start > subtitles_cn[sub_idx].end: cn_str += ","
+          cn_str += " "
+        cn_str += subtitles_cn[sub_idx+n_subs].text
+        n_subs += 1
+
+    en_str = ""
+    n_subs = 0
+    while subtitles_en[sub_idx+n_subs].start < voice_changes[speaker_idx] - 0.1:
+      if n_subs > 0:
+        if subtitles_cn[sub_idx+n_subs].start > subtitles_cn[sub_idx].end: en_str += ","
+        en_str += " "
+      en_str += subtitles_en[sub_idx+n_subs].text
+      n_subs += 1
+
+    print("rory cn sample =",cn_str)
+    print("rory en subs =",en_str)
+    print("speaker =",speakers[speaker_idx],"\n\n\n")
+    print("rory use_voice =",use_voice)
+    speaker_idx+=1
+    sub_idx+=n_subs
 
   print("here")
