@@ -111,22 +111,10 @@ if __name__ == "__main__":
   #  assert [subtitles_en[i].start, subtitles_en[i].end] == [subtitles_cn[i].start, subtitles_cn[i].end]
 
   model = omni()
-  '''
-  save_voice_from_audio(start="00:05:35.5", end="00:05:44.0", voice_name="1",
-                        text="因为那个顺雨他之前在去年的时候说, AI进入了the second half, 进入了下半场这个成为了一个非常有名的观点")
-  
-  audio = model.generate(
-    text=f"hello, this is speaker {1} speaking english now, can you understand me or not? thank you for listening.",
-    cv_path=f"voices/{1}.cv",
-    num_steps=32,
-    language="en"
-  )
-  with open(f"outputs/{1}_test.wav", "wb") as f: f.write(waveform_to_wav_bytes(audio, SAMPLING_RATE))
-  
-  
 
-  save_voice_from_audio(start="00:01:35.161", end="00:01:42.669", voice_name="2",
-                        text="啊 可以 对，就是我叫姚顺宇然后显然也有一个跟我几乎同名的朋友")
+  # todo, just use the previous sample instead of a random one for short segments?
+  save_voice_from_audio(start="00:05:35.5", end="00:05:44.0", voice_name="2",
+                        text="因为那个顺雨他之前在去年的时候说, AI进入了the second half, 进入了下半场这个成为了一个非常有名的观点")
   audio = model.generate(
     text=f"hello, this is speaker {2} speaking english now, can you understand me or not? thank you for listening.",
     cv_path=f"voices/{2}.cv",
@@ -134,7 +122,17 @@ if __name__ == "__main__":
     language="en"
   )
   with open(f"outputs/{2}_test.wav", "wb") as f: f.write(waveform_to_wav_bytes(audio, SAMPLING_RATE))
-  '''
+
+  
+  save_voice_from_audio(start="00:01:35.161", end="00:01:42.669", voice_name="1",
+                        text="啊 可以 对，就是我叫姚顺宇然后显然也有一个跟我几乎同名的朋友")
+  audio = model.generate(
+    text=f"hello, this is speaker {1} speaking english now, can you understand me or not? thank you for listening.",
+    cv_path=f"voices/{1}.cv",
+    num_steps=32,
+    language="en"
+  )
+  with open(f"outputs/{1}_test.wav", "wb") as f: f.write(waveform_to_wav_bytes(audio, SAMPLING_RATE))
   #exit()
 
   # reset output file
@@ -177,7 +175,7 @@ if __name__ == "__main__":
   time = voice_changes[speaker_idx]
   use_voice = True
   while subtitles_en[sub_idx].start < voice_changes[-1]:
-    use_voice = (voice_changes[speaker_idx+1] - voice_changes[speaker_idx]) > 5
+    use_voice = (voice_changes[speaker_idx] - voice_changes[speaker_idx-1]) > 5
     cn_str = ""
     if use_voice:
       n_subs = 0
@@ -187,6 +185,7 @@ if __name__ == "__main__":
           cn_str += " "
         cn_str += subtitles_cn[sub_idx+n_subs].text
         n_subs += 1
+      print("RORY CN LENGTH =",subtitles_cn[sub_idx+n_subs].end - subtitles_cn[sub_idx].start)
 
     en_str = ""
     n_subs = 0
