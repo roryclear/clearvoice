@@ -113,6 +113,7 @@ if __name__ == "__main__":
   model = omni()
 
   # todo, just use the previous sample instead of a random one for short segments?
+  '''
   save_voice_from_audio(start="00:05:35.5", end="00:05:44.0", voice_name="2",
                         text="因为那个顺雨他之前在去年的时候说, AI进入了the second half, 进入了下半场这个成为了一个非常有名的观点")
   audio = model.generate(
@@ -133,6 +134,7 @@ if __name__ == "__main__":
     language="en"
   )
   with open(f"outputs/{1}_test.wav", "wb") as f: f.write(waveform_to_wav_bytes(audio, SAMPLING_RATE))
+  '''
   #exit()
 
   # reset output file
@@ -186,6 +188,7 @@ if __name__ == "__main__":
         cn_str += subtitles_cn[sub_idx+n_subs].text
         n_subs += 1
       print("RORY CN LENGTH =",subtitles_cn[sub_idx+n_subs].end - subtitles_cn[sub_idx].start)
+      save_voice_from_audio(start=subtitles_cn[sub_idx].start, end=subtitles_cn[sub_idx+n_subs].end, voice_name=f"{speakers[speaker_idx]}", text=cn_str)
 
     en_str = ""
     n_subs = 0
@@ -195,6 +198,15 @@ if __name__ == "__main__":
         en_str += " "
       en_str += subtitles_en[sub_idx+n_subs].text
       n_subs += 1
+
+    print("rory en_str =",en_str)
+    audio = model.generate(
+      text=en_str,
+      cv_path=f"voices/{speakers[speaker_idx]}.cv",
+      num_steps=32,
+      language="en"
+    )
+    with open(f"outputs/tmp_out.wav", "wb") as f: f.write(waveform_to_wav_bytes(audio, SAMPLING_RATE))
 
     print("rory cn sample =",cn_str)
     print("rory en subs =",en_str)
