@@ -208,10 +208,43 @@ if __name__ == "__main__":
     )
     with open(f"outputs/tmp_out.wav", "wb") as f: f.write(waveform_to_wav_bytes(audio, SAMPLING_RATE))
 
+
     print("rory cn sample =",cn_str)
     print("rory en subs =",en_str)
     print("speaker =",speakers[speaker_idx],"\n\n\n")
     print("rory use_voice =",use_voice)
+
+
+    if len(en_str) > 0:
+      src = "podcast/podcast_en.wav"
+      replacement = "outputs/tmp_out.wav"
+      output = "podcast/podcast_en_replaced.wav"
+      tmp_output = "podcast/podcast_en.tmp.wav"
+      start = subtitles_cn[sub_idx].start
+      end =  subtitles_cn[sub_idx+n_subs].end
+      duration = end - start
+      audio_duration = len(audio) / SAMPLING_RATE
+      tempo = audio_duration / duration
+
+      cmd = [
+          "ffmpeg", "-y",
+          "-i", "podcast/podcast_en.wav",
+          "-i", "outputs/tmp_out.wav",
+          "-filter_complex",
+          (
+              f"[0:a]atrim=0:{start},asetpts=PTS-STARTPTS[before];"
+              f"[1:a]atempo={tempo},asetpts=PTS-STARTPTS[new];"
+              f"[0:a]atrim=start={end},asetpts=PTS-STARTPTS[after];"
+              f"[before][new][after]concat=n=3:v=0:a=1[out]"
+          ),
+          "-map", "[out]",
+          "-c:a", "pcm_s16le",
+          "podcast/podcast_en.tmp.wav",
+      ]
+
+      subprocess.run(cmd, check=True)
+      os.replace("podcast/podcast_en.tmp.wav", "podcast/podcast_en.wav")
+
     speaker_idx+=1
     sub_idx+=n_subs
 
