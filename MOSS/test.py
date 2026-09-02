@@ -4,7 +4,6 @@ from typing import Any, Callable
 import numpy as np
 import copy
 from pathlib import Path
-from transformers.generation.streamers import BaseStreamer
 
 from transformers.audio_utils import load_audio
 from dataclasses import dataclass
@@ -455,7 +454,7 @@ def parse_transcript(text: str, **parser_kwargs) -> list[TranscriptSegment]:
 
 
 model_id = "OpenMOSS-Team/MOSS-Transcribe-Diarize"
-audio_path = "MOSS/output.wav"
+audio_path = "MOSS/output.wav" # 10 mins for now
 
 device = torch.device("cpu")
 dtype = torch.bfloat16 if device.type == "cuda" else torch.float32

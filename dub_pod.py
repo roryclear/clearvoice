@@ -111,20 +111,20 @@ if __name__ == "__main__":
   #  assert [subtitles_en[i].start, subtitles_en[i].end] == [subtitles_cn[i].start, subtitles_cn[i].end]
 
   model = omni()
-  
-  save_voice_from_audio(start="00:05:35.5", end="00:05:44.0", voice_name="0",
+
+  # todo, just use the previous sample instead of a random one for short segments?
+  '''
+  save_voice_from_audio(start="00:05:35.5", end="00:05:44.0", voice_name="2",
                         text="因为那个顺雨他之前在去年的时候说, AI进入了the second half, 进入了下半场这个成为了一个非常有名的观点")
-  
   audio = model.generate(
-    text=f"hello, this is speaker {0} speaking english now, can you understand me or not? thank you for listening.",
-    cv_path=f"voices/{0}.cv",
+    text=f"hello, this is speaker {2} speaking english now, can you understand me or not? thank you for listening.",
+    cv_path=f"voices/{2}.cv",
     num_steps=32,
     language="en"
   )
-  with open(f"outputs/{0}_test.wav", "wb") as f: f.write(waveform_to_wav_bytes(audio, SAMPLING_RATE))
-  
-  
+  with open(f"outputs/{2}_test.wav", "wb") as f: f.write(waveform_to_wav_bytes(audio, SAMPLING_RATE))
 
+  
   save_voice_from_audio(start="00:01:35.161", end="00:01:42.669", voice_name="1",
                         text="啊 可以 对，就是我叫姚顺宇然后显然也有一个跟我几乎同名的朋友")
   audio = model.generate(
@@ -134,6 +134,7 @@ if __name__ == "__main__":
     language="en"
   )
   with open(f"outputs/{1}_test.wav", "wb") as f: f.write(waveform_to_wav_bytes(audio, SAMPLING_RATE))
+  '''
   #exit()
 
   # reset output file
@@ -154,11 +155,11 @@ if __name__ == "__main__":
   voice_changes = [38, 42, 74, 81, 112, 116, 120, 121, 131, 133, 139, 140, 147, 148, 172, 175, 180, 188, 224, 230, 234, 235, 263, 278, 282, 291, 292, 317, 318, 323, 324, 350, 355, 356, 359, 362, 363, 367, 368, 389, 394, 398, 401,
                   420, 421, 427, 428, 432, 433, 448, 454, 469, 476, 500, 502, 523, 530, 547, 548, 579, 580, 598, 599, 602, 605, 612, 613, 614, 616, 621, 623, 632, 635, 637, 638, 641, 642, 652, 653, 675, 678, 680, 697, 722, 728,
                   759, 760, 771, 774, 775, 777, 800, 802, 807, 809, 827, 829, 834, 835, 851, 852, 861, 862, 885, 886, 891, 893, 914, 915, 918, 920, 921, 930, 939, 940, 955, 961, 965]
-  speaker = 1
-  time = 86 # skip intro
-  #time = 28*60 + 51 + 0.229
-  change_idx = 0
-  sub_idx = 0
+
+  voice_changes =  [9.26, 37.06, 43.61, 45.38, 68.94, 69.74, 70.81, 71.93, 87.89, 94.94, 157.88, 161.75, 161.92, 166.52, 221.68, 226.23, 236.98, 238.04, 252.32, 255.34, 265.01, 267.24, 275.49, 276.12, 319.57, 324.29, 334.65]
+  speakers = [1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1]
+
+  time = 0
 
   subprocess.run([
       "ffmpeg",
@@ -171,95 +172,88 @@ if __name__ == "__main__":
   os.replace("podcast/podcast_en_temp.wav", "podcast/podcast_en.wav")
 
 
-  while subtitles_en[sub_idx].number < voice_changes[-1]:
-    text_cn = subtitles_cn[sub_idx].text
-    text_en = subtitles_en[sub_idx].text
-    i = 1
-    print(subtitles_en[sub_idx+i].number, voice_changes[change_idx]-1, "HERE RORY", "speaker =",speaker)
-    while subtitles_en[sub_idx+i].number < voice_changes[change_idx]-1: # todo, en and cn are different but it should be ok lol
-      if subtitles_en[sub_idx+i].end - subtitles_en[sub_idx].start < MAX_REF_AUDIO_LEN and subtitles_en[sub_idx+i].start < subtitles_en[voice_changes[change_idx]-1].start: # max 15 sec ref
-        text_cn += subtitles_cn[sub_idx+i].text
-        cn_end = subtitles_en[sub_idx+i].end
-        if subtitles_en[sub_idx+i].start - subtitles_en[sub_idx+i-1].end > 0:
-          text_cn += ", "
-        else:
-          text_cn += " "
+  sub_idx = 0
+  #speaker_idx = 0
+  
+  speaker_idx = 8
+  while subtitles_en[sub_idx].start < voice_changes[speaker_idx]: sub_idx+=1
 
-      # todo dup
-      if subtitles_en[sub_idx+i].start - subtitles_en[sub_idx+i-1].end > 0:
-        text_en += ", "
-      else:
-        text_en += " "
+  time = voice_changes[speaker_idx]
+  use_voice = True
+  while subtitles_en[sub_idx].start < voice_changes[-1]:
+    use_voice = (voice_changes[speaker_idx] - voice_changes[speaker_idx-1]) > 5
+    cn_str = ""
+    if use_voice:
+      n_subs = 0
+      while subtitles_cn[sub_idx+n_subs].end - subtitles_cn[sub_idx].start < 15 and subtitles_en[sub_idx+n_subs].end < voice_changes[speaker_idx]-0.1:
+        if n_subs > 0:
+          if subtitles_cn[sub_idx+n_subs].start > subtitles_cn[sub_idx].end: cn_str += ","
+          cn_str += " "
+        cn_str += subtitles_cn[sub_idx+n_subs].text
+        n_subs += 1
+      n_subs -= 1
+      print("cn_str =",cn_str)
+      print("RORY CN LENGTH =",subtitles_cn[sub_idx+n_subs].end - subtitles_cn[sub_idx].start)
+      # todo hack taking away from start for now?
+      if n_subs > 0: save_voice_from_audio(start=subtitles_cn[sub_idx].start - 0.5, end=subtitles_cn[sub_idx+n_subs].end, voice_name=f"{speakers[speaker_idx]}", text=cn_str)
 
-      text_en += subtitles_en[sub_idx+i].text
-      i+=1
-    print(text_cn, "\n", text_en)
-    print("start =",subtitles_cn[sub_idx].start, "end =",subtitles_cn[sub_idx+i].end)
-    if subtitles_cn[sub_idx].start < time:
-      sub_idx+=i
-      change_idx+=1
-      speaker = (speaker + 1) % 2 # todo, unhardcode number of speakers
-      continue
-    new_voice = (subtitles_cn[sub_idx+i].end - subtitles_cn[sub_idx].start) > 5 # min 5 seconds sample
-    if subtitles_en[sub_idx].number > 42 and subtitles_en[sub_idx].number < 74: new_voice = False # broken bit because guest talks a little
-    if subtitles_cn[sub_idx].start >= cn_end: new_voice = False
-    if new_voice:
-      voice = "voices/tmp.cv"
-      save_voice_from_audio(start=subtitles_cn[sub_idx].start, end=cn_end, voice_name="tmp", text=text_cn)
-    else:
-      print("TOO SHORT?", speaker)
-      voice = f"voices/{speaker}.cv"
+    en_str = ""
+    n_subs = 0
+    while subtitles_en[sub_idx+n_subs].start < voice_changes[speaker_idx] - 0.1:
+      if n_subs > 0:
+        if subtitles_cn[sub_idx+n_subs].start > subtitles_cn[sub_idx].end: en_str += ","
+        en_str += " "
+      en_str += subtitles_en[sub_idx+n_subs].text
+      n_subs += 1
 
-    audio = model.generate(
-      text=text_en,
-      cv_path=voice,
-      num_steps=32,
-      language="en",
-    )
-    with open("outputs/tmp.wav", "wb") as f: f.write(waveform_to_wav_bytes(audio, SAMPLING_RATE))
+    print("en_str =",en_str)
+    if len(en_str) > 0:
 
-    start_time = subtitles_cn[sub_idx].start
-    end_time = subtitles_cn[sub_idx+i-1].end
-    target_duration = end_time - start_time
+      audio = model.generate(
+        text=en_str,
+        cv_path=f"voices/{speakers[speaker_idx]}.cv",
+        num_steps=32,
+        language="en"
+      )
+      with open(f"outputs/tmp_out.wav", "wb") as f: f.write(waveform_to_wav_bytes(audio, SAMPLING_RATE))
+      
 
-    wav_bytes = waveform_to_wav_bytes(audio, SAMPLING_RATE)
-    actual_duration = len(audio) / SAMPLING_RATE
-
-    speed = actual_duration / target_duration
-    with open("outputs/tmp.wav", "wb") as f:
-        f.write(wav_bytes)
-    
-    # Apply atempo
-    speed = max(speed, 0.5)
-    subprocess.run([
-        "ffmpeg", "-y",
-        "-i", "outputs/tmp.wav",
-        "-filter:a", f"atempo={speed}",
-        "outputs/tmp2.wav"
-    ], check=True)
-    os.replace("outputs/tmp2.wav", "outputs/tmp.wav")
-    
-    actual_duration = target_duration
+      print("rory cn sample =",cn_str)
+      print("rory en subs =",en_str)
+      print("speaker =",speakers[speaker_idx],"\n\n\n")
+      print("rory use_voice =",use_voice)
 
 
-    duration_ms = max(0, int((start_time * 1000)))
-    temp_output = "podcast/podcast_en_temp.wav"
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-i", "podcast/podcast_en.wav",
-        "-i", "outputs/tmp.wav",
-        "-filter_complex",
-        f"[1:a]adelay={duration_ms}:all=1[overlay];"
-        "[0:a][overlay]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[outa]",
-        "-map", "[outa]",
-        "-c:a", "pcm_s16le",
-        temp_output
-    ]
-    subprocess.run(cmd, check=True)
-    os.replace(temp_output, "podcast/podcast_en.wav")
+      src = "podcast/podcast_en.wav"
+      replacement = "outputs/tmp_out.wav"
+      output = "podcast/podcast_en_replaced.wav"
+      tmp_output = "podcast/podcast_en.tmp.wav"
+      start = subtitles_cn[sub_idx].start
+      end =  subtitles_cn[sub_idx+n_subs-1].end
+      duration = end - start
+      audio_duration = len(audio) / SAMPLING_RATE
+      tempo = audio_duration / duration
 
-    sub_idx+=i
-    change_idx+=1
-    speaker = (speaker + 1) % 2 # todo unhardcode
+      cmd = [
+          "ffmpeg", "-y",
+          "-i", "podcast/podcast_en.wav",
+          "-i", "outputs/tmp_out.wav",
+          "-filter_complex",
+          (
+              f"[0:a]atrim=0:{start},asetpts=PTS-STARTPTS[before];"
+              f"[1:a]atempo={tempo},asetpts=PTS-STARTPTS[new];"
+              f"[0:a]atrim=start={end},asetpts=PTS-STARTPTS[after];"
+              f"[before][new][after]concat=n=3:v=0:a=1[out]"
+          ),
+          "-map", "[out]",
+          "-c:a", "pcm_s16le",
+          "podcast/podcast_en.tmp.wav",
+      ]
+
+      subprocess.run(cmd, check=True)
+      os.replace("podcast/podcast_en.tmp.wav", "podcast/podcast_en.wav")
+
+    speaker_idx+=1
+    sub_idx+=n_subs
+
   print("here")
