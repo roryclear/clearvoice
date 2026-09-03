@@ -641,16 +641,12 @@ def parse_transcript(text: str, **parser_kwargs) -> list[TranscriptSegment]:
 MODEL_FOR_CAUSAL_LM_MAPPING = _LazyAutoMapping(CONFIG_MAPPING_NAMES, MODEL_FOR_CAUSAL_LM_MAPPING_NAMES)
 class AutoModelForCausalLM(_BaseAutoModelClass):
     _model_mapping = MODEL_FOR_CAUSAL_LM_MAPPING
-
-    # override to give better return typehint
     @classmethod
     def from_pretrained(
         cls: type["AutoModelForCausalLM"],
         pretrained_model_name_or_path: str | os.PathLike[str],
-        *model_args,
-        **kwargs,
-    ) -> "_BaseModelWithGenerate":
-        return super().from_pretrained(pretrained_model_name_or_path, *model_args, **kwargs)
+    ):  
+        return super().from_pretrained(pretrained_model_name_or_path, dtype='auto', trust_remote_code=True)
 
 model_id = "OpenMOSS-Team/MOSS-Transcribe-Diarize"
 audio_path = "MOSS/output.wav" # 10 mins for now
@@ -658,11 +654,7 @@ audio_path = "MOSS/output.wav" # 10 mins for now
 device = torch.device("cpu")
 dtype = torch.bfloat16 if device.type == "cuda" else torch.float32
 
-model = AutoModelForCausalLM.from_pretrained(
-    model_id,
-    trust_remote_code=True,
-    dtype="auto",
-).to(dtype=dtype).to(device).eval()
+model = AutoModelForCausalLM.from_pretrained(model_id).to(dtype=dtype).to(device).eval()
 processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
 
 messages = build_transcription_messages(audio_path)
