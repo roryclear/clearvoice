@@ -1,5 +1,11 @@
 # ClearVoice
 
+<a href="https://apps.apple.com/gb/app/clearcam/id6743237694">
+  <img src="https://developer.apple.com/assets/elements/badges/download-on-the-app-store.svg"
+       alt="Download on the App Store"
+       height="50"/>
+</a>
+
 ## Python setup:
 ```
 pip install -r requirements.txt
