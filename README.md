@@ -1,7 +1,5 @@
 # ClearVoice
 
-[![Download on the App Store](appstore.jpeg)](https://apps.apple.com/app/id123456789)
-
 ## Python setup:
 ```
 pip install -r requirements.txt
