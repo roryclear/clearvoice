@@ -6,6 +6,11 @@
        height="50"/>
 </a>
 
+## Run iOS app from source
+
+- Open Xcode project in app folder
+- Drag in .rc files to the Xcode project from: https://huggingface.co/roryclear/OmniVoice/tree/main
+
 ## Python setup:
 ```
 pip install -r requirements.txt
