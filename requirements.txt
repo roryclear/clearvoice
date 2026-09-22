@@ -1,2 +1,3 @@
-git+https://github.com/tinygrad/tinygrad.git@cbfcf36e4476444b2543fc4155c18133d995690f
+# cbfcf36e4476444b2543fc4155c18133d995690f for export?
+git+https://github.com/tinygrad/tinygrad.git@6f87158d77f66a36d5f8bbe915170b24e2acabe8
 numpy==2.0.0
