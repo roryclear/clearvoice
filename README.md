@@ -6,7 +6,9 @@
        height="50"/>
 </a>
 
-## Run iOS app from source
+<img src="screenshot.png" alt="ClearVoice screenshot" width="400"/>
+
+## Run iOS/MacOS app from source
 
 - Open Xcode project in app folder
 - Drag in .rc files to the Xcode project from: https://huggingface.co/roryclear/OmniVoice/tree/main
