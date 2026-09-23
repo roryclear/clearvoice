@@ -919,10 +919,8 @@ MODEL_FOR_CAUSAL_LM_MAPPING = _LazyAutoMapping(CONFIG_MAPPING_NAMES, MODEL_FOR_C
 class AutoModelForCausalLM(_BaseAutoModelClass):
     _model_mapping = MODEL_FOR_CAUSAL_LM_MAPPING
     @classmethod
-    def from_pretrained(
-        cls: type["AutoModelForCausalLM"]
-    ):  
-        return super().from_pretrained("OpenMOSS-Team/MOSS-Transcribe-Diarize", dtype='auto', trust_remote_code=True)
+    def from_pretrained(self): 
+        return super().from_pretrained("OpenMOSS-Team/MOSS-Transcribe-Diarize")
 
 device = torch.device("cpu")
 dtype = torch.bfloat16 if device.type == "cuda" else torch.float32
@@ -931,7 +929,7 @@ model = AutoModelForCausalLM.from_pretrained().to(dtype=dtype).to(device).eval()
 model_id = "OpenMOSS-Team/MOSS-Transcribe-Diarize"
 audio_path = "MOSS/output.wav" # 10 mins for now
 
-processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+processor = AutoProcessor.from_pretrained(model_id)
 
 messages = build_transcription_messages(audio_path)
 result = generate_transcription(
