@@ -251,73 +251,46 @@ class _BaseAutoModelClass:
         commit_hash = None
         adapter_kwargs = None
 
-        if not isinstance(config, PreTrainedConfig):
-            # We make a call to the config file first (which may be absent) to get the commit hash as soon as possible
-            resolved_config_file = cached_file(
-                pretrained_model_name_or_path,
-                CONFIG_NAME,
-                _raise_exceptions_for_gated_repo=False,
-                _raise_exceptions_for_missing_entries=False,
-                _raise_exceptions_for_connection_errors=False,
-                **hub_kwargs,
-            )
-            commit_hash = extract_commit_hash(resolved_config_file, commit_hash)
-        else:
-            commit_hash = getattr(config, "_commit_hash", None)
 
-        if is_peft_available():
-            if adapter_kwargs is None:
-                adapter_kwargs = {}
-            adapter_kwargs = adapter_kwargs.copy()  # avoid mutating original
+        resolved_config_file = cached_file(
+            pretrained_model_name_or_path,
+            CONFIG_NAME,
+            _raise_exceptions_for_gated_repo=False,
+            _raise_exceptions_for_missing_entries=False,
+            _raise_exceptions_for_connection_errors=False,
+            **hub_kwargs,
+        )
+        commit_hash = extract_commit_hash(resolved_config_file, commit_hash)
 
-            maybe_adapter_path = find_adapter_config_file(
-                pretrained_model_name_or_path, _commit_hash=commit_hash, **adapter_kwargs
-            )
+        kwargs_orig = copy.deepcopy(kwargs)
+        # ensure not to pollute the config object with dtype="auto" - since it's
+        # meaningless in the context of the config object - torch.dtype values are acceptable
+        if kwargs.get("torch_dtype") == "auto":
+            _ = kwargs.pop("torch_dtype")
+        if kwargs.get("dtype") == "auto":
+            _ = kwargs.pop("dtype")
+        # to not overwrite the quantization_config if config has a quantization_config
+        if kwargs.get("quantization_config") is not None:
+            _ = kwargs.pop("quantization_config")
 
-            if maybe_adapter_path is not None:
-                with open(maybe_adapter_path, "r", encoding="utf-8") as f:
-                    adapter_config = json.load(f)
+        config, kwargs = AutoConfig.from_pretrained(
+            pretrained_model_name_or_path,
+            return_unused_kwargs=True,
+            code_revision=code_revision,
+            _commit_hash=commit_hash,
+            **hub_kwargs,
+            **kwargs,
+        )
 
-                    adapter_kwargs["_adapter_model_path"] = pretrained_model_name_or_path
-                    # Only override the model name/path if the current value doesn't point to a
-                    # complete model with an embedded adapter so that local models with embedded
-                    # adapters will load from the local base model rather than pull the base
-                    # model named in the adapter's config from the hub.
-                    if not os.path.exists(pretrained_model_name_or_path) or not os.path.exists(
-                        os.path.join(pretrained_model_name_or_path, CONFIG_NAME)
-                    ):
-                        pretrained_model_name_or_path = adapter_config["base_model_name_or_path"]
-
-        if not isinstance(config, PreTrainedConfig):
-            kwargs_orig = copy.deepcopy(kwargs)
-            # ensure not to pollute the config object with dtype="auto" - since it's
-            # meaningless in the context of the config object - torch.dtype values are acceptable
-            if kwargs.get("torch_dtype") == "auto":
-                _ = kwargs.pop("torch_dtype")
-            if kwargs.get("dtype") == "auto":
-                _ = kwargs.pop("dtype")
-            # to not overwrite the quantization_config if config has a quantization_config
-            if kwargs.get("quantization_config") is not None:
-                _ = kwargs.pop("quantization_config")
-
-            config, kwargs = AutoConfig.from_pretrained(
-                pretrained_model_name_or_path,
-                return_unused_kwargs=True,
-                code_revision=code_revision,
-                _commit_hash=commit_hash,
-                **hub_kwargs,
-                **kwargs,
-            )
-
-            # A concrete dtype is absorbed into the config above and then dropped at the composite
-            # `get_text_config()` swap, so re-inject the user's value as an explicit kwarg to force the model's
-            # `from_pretrained` to honor it over the config's saved dtype (#46459).
-            if kwargs_orig.get("torch_dtype", None) is not None:
-                kwargs["torch_dtype"] = kwargs_orig["torch_dtype"]
-            if kwargs_orig.get("dtype", None) is not None:
-                kwargs["dtype"] = kwargs_orig["dtype"]
-            if kwargs_orig.get("quantization_config", None) is not None:
-                kwargs["quantization_config"] = kwargs_orig["quantization_config"]
+        # A concrete dtype is absorbed into the config above and then dropped at the composite
+        # `get_text_config()` swap, so re-inject the user's value as an explicit kwarg to force the model's
+        # `from_pretrained` to honor it over the config's saved dtype (#46459).
+        if kwargs_orig.get("torch_dtype", None) is not None:
+            kwargs["torch_dtype"] = kwargs_orig["torch_dtype"]
+        if kwargs_orig.get("dtype", None) is not None:
+            kwargs["dtype"] = kwargs_orig["dtype"]
+        if kwargs_orig.get("quantization_config", None) is not None:
+            kwargs["quantization_config"] = kwargs_orig["quantization_config"]
 
         has_remote_code = hasattr(config, "auto_map") and cls.__name__ in config.auto_map
         has_local_code = type(config) in cls._model_mapping
