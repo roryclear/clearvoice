@@ -122,49 +122,32 @@ class _BaseAutoModelClass:
 
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path: str | os.PathLike[str], *model_args, **kwargs):
-        config = kwargs.pop("config", None)
-        trust_remote_code = kwargs.get("trust_remote_code")
+        config = None
+        trust_remote_code = None
         kwargs["_from_auto"] = True
-        hub_kwargs_names = [
-            "cache_dir",
-            "force_download",
-            "local_files_only",
-            "proxies",
-            "revision",
-            "subfolder",
-            "token",
-        ]
-        hub_kwargs = {name: kwargs.pop(name) for name in hub_kwargs_names if name in kwargs}
-        code_revision = kwargs.pop("code_revision", None)
-        commit_hash = kwargs.pop("_commit_hash", None)
-        adapter_kwargs = kwargs.pop("adapter_kwargs", None)
+        hub_kwargs = {}
+        code_revision = None
+        commit_hash = None
+        adapter_kwargs = None
 
-        token = hub_kwargs.pop("token", None)
-
-        if token is not None:
-            hub_kwargs["token"] = token
-
-        if commit_hash is None:
-            if not isinstance(config, PreTrainedConfig):
-                # We make a call to the config file first (which may be absent) to get the commit hash as soon as possible
-                resolved_config_file = cached_file(
-                    pretrained_model_name_or_path,
-                    CONFIG_NAME,
-                    _raise_exceptions_for_gated_repo=False,
-                    _raise_exceptions_for_missing_entries=False,
-                    _raise_exceptions_for_connection_errors=False,
-                    **hub_kwargs,
-                )
-                commit_hash = extract_commit_hash(resolved_config_file, commit_hash)
-            else:
-                commit_hash = getattr(config, "_commit_hash", None)
+        if not isinstance(config, PreTrainedConfig):
+            # We make a call to the config file first (which may be absent) to get the commit hash as soon as possible
+            resolved_config_file = cached_file(
+                pretrained_model_name_or_path,
+                CONFIG_NAME,
+                _raise_exceptions_for_gated_repo=False,
+                _raise_exceptions_for_missing_entries=False,
+                _raise_exceptions_for_connection_errors=False,
+                **hub_kwargs,
+            )
+            commit_hash = extract_commit_hash(resolved_config_file, commit_hash)
+        else:
+            commit_hash = getattr(config, "_commit_hash", None)
 
         if is_peft_available():
             if adapter_kwargs is None:
                 adapter_kwargs = {}
             adapter_kwargs = adapter_kwargs.copy()  # avoid mutating original
-            if token is not None:
-                adapter_kwargs["token"] = token
 
             maybe_adapter_path = find_adapter_config_file(
                 pretrained_model_name_or_path, _commit_hash=commit_hash, **adapter_kwargs
