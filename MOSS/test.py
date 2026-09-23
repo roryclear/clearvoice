@@ -270,61 +270,17 @@ class _BaseAutoModelClass:
             **hub_kwargs,
             **kwargs,
         )
-
-        has_remote_code = hasattr(config, "auto_map") and cls.__name__ in config.auto_map
-        has_local_code = type(config) in cls._model_mapping
-        explicit_local_code = has_local_code and not _get_model_class(
-            config, cls._model_mapping
-        ).__module__.startswith("transformers.")
-        upstream_repo = None
-        if has_remote_code:
-            class_ref = config.auto_map[cls.__name__]
-            if "--" in class_ref:
-                upstream_repo = class_ref.split("--")[0]
-        trust_remote_code = resolve_trust_remote_code(
-            trust_remote_code,
-            pretrained_model_name_or_path,
-            has_local_code,
-            has_remote_code,
-            upstream_repo=upstream_repo,
-        )
-        kwargs["trust_remote_code"] = trust_remote_code
-
-        # Set the adapter kwargs
+        class_ref = config.auto_map[cls.__name__]
         kwargs["adapter_kwargs"] = adapter_kwargs
 
-        if has_remote_code and trust_remote_code and not explicit_local_code:
-            model_class = get_class_from_dynamic_module(
-                class_ref, pretrained_model_name_or_path, code_revision=code_revision, **hub_kwargs, **kwargs
-            )
-            _ = hub_kwargs.pop("code_revision", None)
-            cls.register(config.__class__, model_class, exist_ok=True)
-            model_class.register_for_auto_class(auto_class=cls)
-            model_class = add_generation_mixin_to_remote_model(model_class)
-            return model_class.from_pretrained(
-                pretrained_model_name_or_path, *model_args, config=config, **hub_kwargs, **kwargs
-            )
-        elif has_local_code:
-            model_class = _get_model_class(config, cls._model_mapping)
-            text_config_class = config.sub_configs.get("text_config", None)
-            # getattr avoids AttributeError, as registered remote-code model classes may lack config_class
-            if text_config_class is not None and getattr(model_class, "config_class", None) == text_config_class:
-                # TODO: Validate that copying the parent quantization config to the text sub-config preserves
-                # modules_to_not_convert and skip-module matching when composite-model module prefixes differ.
-                parent_config = config
-                config = config.get_text_config()
-                # Check both `quantization_config` being present and also not null,
-                # as a `config.json` can have `"quantization_config": null` in it
-                parent_quant = getattr(parent_config, "quantization_config", None)
-                if parent_quant is not None:
-                    config.quantization_config = parent_quant
-            return model_class.from_pretrained(
-                pretrained_model_name_or_path, *model_args, config=config, **hub_kwargs, **kwargs
-            )
-        raise ValueError(
-            f"Unrecognized configuration class {config.__class__} for this kind of AutoModel: {cls.__name__}.\n"
-            f"Model type should be one of {', '.join(c.__name__ for c in cls._model_mapping)}."
+        model_class = get_class_from_dynamic_module(
+            class_ref, pretrained_model_name_or_path, code_revision=code_revision, **hub_kwargs, **kwargs
         )
+        _ = hub_kwargs.pop("code_revision", None)
+        cls.register(config.__class__, model_class, exist_ok=True)
+        model_class.register_for_auto_class(auto_class=cls)
+        model_class = add_generation_mixin_to_remote_model(model_class)
+        return model_class.from_pretrained(pretrained_model_name_or_path, *model_args, config=config, **hub_kwargs, **kwargs)
 
     @classmethod
     def register(cls, config_class, model_class, exist_ok=False) -> None:
