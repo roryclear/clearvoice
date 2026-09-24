@@ -87,8 +87,7 @@ class _BaseAutoModelClass:
             **kwargs,
         )
 
-
-        class_ref = config.auto_map[cls.__name__]
+        class_ref = config.auto_map["AutoModelForCausalLM"]
 
         kwargs["adapter_kwargs"] = adapter_kwargs
 
@@ -546,14 +545,9 @@ def parse_transcript(text: str, **parser_kwargs) -> list[TranscriptSegment]:
     segments.extend(parser.close())
     return segments
 
-class AutoModelForCausalLM(_BaseAutoModelClass):
-    @classmethod
-    def from_pretrained(self): 
-        return super().from_pretrained("OpenMOSS-Team/MOSS-Transcribe-Diarize")
-
 device = torch.device("cpu")
 dtype = torch.bfloat16 if device.type == "cuda" else torch.float32
-model = AutoModelForCausalLM.from_pretrained().to(dtype=dtype).to(device).eval()
+model = _BaseAutoModelClass.from_pretrained("OpenMOSS-Team/MOSS-Transcribe-Diarize").to(dtype=dtype).to(device).eval()
 
 model_id = "OpenMOSS-Team/MOSS-Transcribe-Diarize"
 audio_path = "MOSS/output.wav" # 10 mins for now
