@@ -71,8 +71,6 @@ class MossTranscribeDiarizeConfig(PretrainedConfig):
             audio_config = self.sub_configs["audio_config"](**audio_config)
 
         text_config.tie_word_embeddings = tie_word_embeddings
-        if not getattr(text_config, "layer_types", None):
-            text_config.layer_types = ["full_attention"] * text_config.num_hidden_layers
 
         self.text_config = text_config
         self.audio_config = audio_config
@@ -112,8 +110,7 @@ class VQAdaptor(nn.Module):
             nn.LayerNorm(hidden_size, eps=norm_eps, bias=True),
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.layers(x)
+    def forward(self, x: torch.Tensor) -> torch.Tensor: return self.layers(x)
 
 class MossTranscribeDiarizeModel(MossTranscribeDiarizePreTrainedModel):
     base_model_prefix = "model"
@@ -136,11 +133,7 @@ class MossTranscribeDiarizeModel(MossTranscribeDiarizePreTrainedModel):
         )
         self.post_init()
 
-    def get_input_embeddings(self):
-        return self.language_model.embed_tokens
-
-    def set_input_embeddings(self, value):
-        self.language_model.embed_tokens = value
+    def get_input_embeddings(self): return self.language_model.embed_tokens
 
     # ---- 4x time merge ---------------------------------------------------
 
@@ -159,24 +152,10 @@ class MossTranscribeDiarizeModel(MossTranscribeDiarizePreTrainedModel):
         audio_feature_lengths: torch.LongTensor,
         audio_chunk_mapping: Optional[torch.LongTensor] = None,
     ) -> list[torch.Tensor]:
-        """Whisper encoder -> 4x time merge -> VQAdaptor.
-
-        Returns list of ``(1, N_tokens, hidden_size)`` tensors.
-        """
-        if input_features is None:
-            raise ValueError("input_features must be provided for audio feature extraction.")
-        if audio_feature_lengths is None:
-            raise ValueError("audio_feature_lengths must be provided with input_features.")
-
         device = next(self.whisper_encoder.parameters()).device
         encoder_dtype = next(self.whisper_encoder.parameters()).dtype
         input_features = input_features.to(device=device, dtype=encoder_dtype)
         audio_feature_lengths = audio_feature_lengths.to(device=device)
-        if audio_feature_lengths.numel() != input_features.shape[0]:
-            raise ValueError(
-                "audio_feature_lengths must contain one length per input_features chunk: "
-                f"got {audio_feature_lengths.numel()} lengths for {input_features.shape[0]} chunks."
-            )
 
         whisper_features = self.whisper_encoder(input_features, return_dict=True).last_hidden_state
 
@@ -185,11 +164,6 @@ class MossTranscribeDiarizeModel(MossTranscribeDiarizePreTrainedModel):
             if audio_chunk_mapping is not None
             else torch.zeros(input_features.shape[0], dtype=torch.long, device=device)
         )
-        if chunk_mapping.numel() != input_features.shape[0]:
-            raise ValueError(
-                "audio_chunk_mapping must contain one sample index per input_features chunk: "
-                f"got {chunk_mapping.numel()} indices for {input_features.shape[0]} chunks."
-            )
 
         num_audios = int(chunk_mapping.max().item()) + 1 if chunk_mapping.numel() else 0
         per_audio_chunks = [[] for _ in range(num_audios)]
@@ -215,30 +189,8 @@ class MossTranscribeDiarizeModel(MossTranscribeDiarizePreTrainedModel):
         inputs_embeds: torch.FloatTensor,
         audio_features: torch.Tensor,
     ) -> torch.BoolTensor:
-        """Return the expanded audio placeholder mask and validate feature count."""
-        if input_ids is None:
-            special_audio_mask = inputs_embeds == self.get_input_embeddings()(
-                torch.tensor(self.config.audio_token_id, dtype=torch.long, device=inputs_embeds.device)
-            )
-            special_audio_mask = special_audio_mask.all(-1)
-        else:
-            special_audio_mask = input_ids.to(device=inputs_embeds.device) == self.config.audio_token_id
-
-        if special_audio_mask.shape != inputs_embeds.shape[:2]:
-            raise ValueError(
-                "input_ids shape must match the first two dimensions of inputs_embeds: "
-                f"got {tuple(special_audio_mask.shape)} and {tuple(inputs_embeds.shape[:2])}."
-            )
-
-        n_audio_tokens = special_audio_mask.sum()
+        special_audio_mask = input_ids.to(device=inputs_embeds.device) == self.config.audio_token_id
         special_audio_mask = special_audio_mask.unsqueeze(-1).expand_as(inputs_embeds).to(inputs_embeds.device)
-        torch_compilable_check(
-            inputs_embeds[special_audio_mask].numel() == audio_features.numel(),
-            (
-                f"Audio features and audio tokens do not match: "
-                f"tokens: {n_audio_tokens}, features {audio_features.shape[0]}"
-            ),
-        )
         return special_audio_mask
 
     def inject_audio_features(
