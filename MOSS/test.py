@@ -280,14 +280,7 @@ class MossTranscribeDiarizeModel(MossTranscribeDiarizePreTrainedModel):
         audio_chunk_mapping: Optional[torch.LongTensor] = None,
         **kwargs,
     ):
-        return_dict = True if return_dict is None else return_dict
-        if input_ids is None and inputs_embeds is None:
-            raise ValueError("You must specify one of input_ids or inputs_embeds.")
-        if input_ids is not None and inputs_embeds is not None:
-            raise ValueError("You must specify only one of input_ids or inputs_embeds.")
-
-        if inputs_embeds is None:
-            inputs_embeds = self.get_input_embeddings()(input_ids)
+        inputs_embeds = self.get_input_embeddings()(input_ids)
         inputs_embeds = self.inject_audio_features(
             input_ids=input_ids,
             inputs_embeds=inputs_embeds,
@@ -295,18 +288,11 @@ class MossTranscribeDiarizeModel(MossTranscribeDiarizePreTrainedModel):
             audio_feature_lengths=audio_feature_lengths,
             audio_chunk_mapping=audio_chunk_mapping,
         )
-        if output_attentions is not None:
-            kwargs["output_attentions"] = output_attentions
-        if output_hidden_states is not None:
-            kwargs["output_hidden_states"] = output_hidden_states
-
         outputs = self.language_model(
             input_ids=None, attention_mask=attention_mask, position_ids=position_ids,
             past_key_values=past_key_values, inputs_embeds=inputs_embeds,
             use_cache=use_cache, **kwargs,
         )
-        if not return_dict:
-            return outputs.to_tuple()
         return outputs
 
 
