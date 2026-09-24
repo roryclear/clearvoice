@@ -7,43 +7,12 @@ from pathlib import Path
 
 from transformers.audio_utils import load_audio
 from transformers.models.auto.auto_factory import _LazyAutoMapping
-from transformers.models.auto.configuration_auto import CONFIG_MAPPING_NAMES, AutoConfig
+from transformers.models.auto.configuration_auto import CONFIG_MAPPING_NAMES
 from transformers.dynamic_module_utils import get_class_from_dynamic_module
 
 from dataclasses import dataclass
 from collections import OrderedDict
 import os
-
-def add_generation_mixin_to_remote_model(model_class):
-    """
-    Adds `GenerationMixin` to the inheritance of `model_class`, if `model_class` is a PyTorch model.
-
-    This function is used for backwards compatibility purposes: in v4.45, we've started a deprecation cycle to make
-    `PreTrainedModel` stop inheriting from `GenerationMixin`. Without this function, older models dynamically loaded
-    from the Hub may not have the `generate` method after we remove the inheritance.
-    """
-    # 1. If it is not a PT model (i.e. doesn't inherit Module), do nothing
-    if "torch.nn.modules.module.Module" not in str(model_class.__mro__):
-        return model_class
-
-    # 2. If it already **directly** inherits from GenerationMixin, do nothing
-    if "GenerationMixin" in str(model_class.__bases__):
-        return model_class
-
-    # 3. Prior to v4.45, we could detect whether a model was `generate`-compatible if it had its own `generate` and/or
-    # `prepare_inputs_for_generation` method.
-    has_custom_generate_in_class = hasattr(model_class, "generate") and "GenerationMixin" not in str(
-        getattr(model_class, "generate")
-    )
-    has_custom_prepare_inputs = hasattr(model_class, "prepare_inputs_for_generation") and "GenerationMixin" not in str(
-        getattr(model_class, "prepare_inputs_for_generation")
-    )
-    if has_custom_generate_in_class or has_custom_prepare_inputs:
-        model_class_with_generation_mixin = type(
-            model_class.__name__, (model_class, GenerationMixin), {**model_class.__dict__}
-        )
-        return model_class_with_generation_mixin
-    return model_class
 
 class _BaseAutoModelClass:
     _model_mapping = _LazyAutoMapping(CONFIG_MAPPING_NAMES, OrderedDict([]))
@@ -63,7 +32,6 @@ class _BaseAutoModelClass:
             class_ref, pretrained_model_name_or_path, code_revision=code_revision, **kwargs
         )
         
-        model_class = add_generation_mixin_to_remote_model(model_class)
         return model_class.from_pretrained(pretrained_model_name_or_path, *model_args, config=None, **kwargs)
 
 # todo just use needed entry...
