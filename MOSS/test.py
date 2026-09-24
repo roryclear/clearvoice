@@ -86,36 +86,19 @@ class _BaseAutoModelClass:
             **hub_kwargs,
             **kwargs,
         )
+
+
         class_ref = config.auto_map[cls.__name__]
+
         kwargs["adapter_kwargs"] = adapter_kwargs
 
         model_class = get_class_from_dynamic_module(
             class_ref, pretrained_model_name_or_path, code_revision=code_revision, **hub_kwargs, **kwargs
         )
+        
         _ = hub_kwargs.pop("code_revision", None)
-        cls.register(config.__class__, model_class, exist_ok=True)
-        model_class.register_for_auto_class(auto_class=cls)
         model_class = add_generation_mixin_to_remote_model(model_class)
         return model_class.from_pretrained(pretrained_model_name_or_path, *model_args, config=config, **hub_kwargs, **kwargs)
-
-    @classmethod
-    def register(cls, config_class, model_class, exist_ok=False) -> None:
-        """
-        Register a new model for this class.
-
-        Args:
-            config_class ([`PreTrainedConfig`]):
-                The configuration corresponding to the model to register.
-            model_class ([`PreTrainedModel`]):
-                The model to register.
-        """
-        if hasattr(model_class, "config_class") and model_class.config_class.__name__ != config_class.__name__:
-            raise ValueError(
-                "The model class you are passing has a `config_class` attribute that is not consistent with the "
-                f"config class you passed (model has {model_class.config_class} and you passed {config_class}. Fix "
-                "one of those so they match!"
-            )
-        cls._model_mapping.register(config_class, model_class, exist_ok=exist_ok)
 
 # todo just use needed entry...
 
