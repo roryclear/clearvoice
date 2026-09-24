@@ -6,6 +6,8 @@ import copy
 from pathlib import Path
 
 from transformers.audio_utils import load_audio
+from transformers.utils import ModelOutput
+from transformers.cache_utils import Cache
 from transformers.models.auto.auto_factory import _LazyAutoMapping
 from transformers.models.auto.configuration_auto import CONFIG_MAPPING_NAMES
 from typing import Optional
@@ -16,7 +18,6 @@ from transformers import GenerationMixin, PreTrainedModel
 from transformers import PretrainedConfig
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 from transformers.models.whisper.configuration_whisper import WhisperConfig
-from transformers.modeling_outputs import CausalLMOutputWithPast
 
 class MossTranscribeDiarizeConfig(PretrainedConfig):
     """Configuration for MOSS-Transcribe-Diarize: Qwen3 text backbone + Whisper audio encoder."""
@@ -305,8 +306,6 @@ class MossTranscribeDiarizeForConditionalGeneration(MossTranscribeDiarizePreTrai
             attentions=outputs.attentions,
         )
 
-    # ---- generation support -----------------------------------------------
-
     def prepare_inputs_for_generation(
         self,
         input_ids,
@@ -344,6 +343,15 @@ class _BaseAutoModelClass:
         kwargs["adapter_kwargs"] = adapter_kwargs
         
         return MossTranscribeDiarizeForConditionalGeneration.from_pretrained(pretrained_model_name_or_path, *model_args, config=None, **kwargs)
+
+
+@dataclass
+class CausalLMOutputWithPast(ModelOutput):
+    loss: torch.FloatTensor | None = None
+    logits: torch.FloatTensor | None = None
+    past_key_values: Cache | None = None
+    hidden_states: tuple[torch.FloatTensor, ...] | None = None
+    attentions: tuple[torch.FloatTensor, ...] | None = None
 
 # todo just use needed entry...
 
