@@ -10,14 +10,6 @@ from transformers.models.auto.auto_factory import _LazyAutoMapping
 from transformers.models.auto.configuration_auto import CONFIG_MAPPING_NAMES, AutoConfig
 from transformers.dynamic_module_utils import get_class_from_dynamic_module
 
-from transformers.utils import (
-    CONFIG_NAME,
-    cached_file,
-    extract_commit_hash,
-    find_adapter_config_file,
-    is_peft_available,
-)
-
 from dataclasses import dataclass
 from collections import OrderedDict
 import os
@@ -64,25 +56,13 @@ class _BaseAutoModelClass:
         kwargs["_from_auto"] = True
         hub_kwargs = {}
         code_revision = None
-        commit_hash = None
         adapter_kwargs = None
-
-
-        resolved_config_file = cached_file(
-            pretrained_model_name_or_path,
-            CONFIG_NAME,
-            _raise_exceptions_for_gated_repo=False,
-            _raise_exceptions_for_missing_entries=False,
-            _raise_exceptions_for_connection_errors=False,
-            **hub_kwargs,
-        )
-        commit_hash = extract_commit_hash(resolved_config_file, commit_hash)
 
         config, kwargs = AutoConfig.from_pretrained(
             pretrained_model_name_or_path,
             return_unused_kwargs=True,
             code_revision=code_revision,
-            _commit_hash=commit_hash,
+            _commit_hash=None,
             **hub_kwargs,
             **kwargs,
         )
