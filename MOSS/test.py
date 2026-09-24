@@ -47,37 +47,24 @@ def add_generation_mixin_to_remote_model(model_class):
 
 class _BaseAutoModelClass:
     _model_mapping = _LazyAutoMapping(CONFIG_MAPPING_NAMES, OrderedDict([]))
-
     def __init__(self, *args, **kwargs) -> None: pass
 
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path: str | os.PathLike[str], *model_args, **kwargs):
-        config = None
         kwargs["_from_auto"] = True
-        hub_kwargs = {}
         code_revision = None
         adapter_kwargs = None
 
-        config, kwargs = AutoConfig.from_pretrained(
-            pretrained_model_name_or_path,
-            return_unused_kwargs=True,
-            code_revision=code_revision,
-            _commit_hash=None,
-            **hub_kwargs,
-            **kwargs,
-        )
-
-        class_ref = config.auto_map["AutoModelForCausalLM"]
+        class_ref = "modeling_moss_transcribe_diarize.MossTranscribeDiarizeForConditionalGeneration"
 
         kwargs["adapter_kwargs"] = adapter_kwargs
 
         model_class = get_class_from_dynamic_module(
-            class_ref, pretrained_model_name_or_path, code_revision=code_revision, **hub_kwargs, **kwargs
+            class_ref, pretrained_model_name_or_path, code_revision=code_revision, **kwargs
         )
         
-        _ = hub_kwargs.pop("code_revision", None)
         model_class = add_generation_mixin_to_remote_model(model_class)
-        return model_class.from_pretrained(pretrained_model_name_or_path, *model_args, config=config, **hub_kwargs, **kwargs)
+        return model_class.from_pretrained(pretrained_model_name_or_path, *model_args, config=None, **kwargs)
 
 # todo just use needed entry...
 
