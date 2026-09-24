@@ -308,33 +308,8 @@ class MossTranscribeDiarizeForConditionalGeneration(MossTranscribeDiarizePreTrai
 
     def tie_weights(self, *args, **kwargs):
         result = super().tie_weights(*args, **kwargs)
-        if self.model is not None and self.lm_head is not None:
-            self.lm_head.weight = self.model.language_model.embed_tokens.weight
+        self.lm_head.weight = self.model.language_model.embed_tokens.weight
         return result
-
-    def get_input_embeddings(self):
-        return self.model.get_input_embeddings()
-
-    def set_input_embeddings(self, value):
-        self.model.set_input_embeddings(value)
-
-    def get_output_embeddings(self):
-        return self.lm_head
-
-    def set_output_embeddings(self, new_embeddings):
-        self.lm_head = new_embeddings
-
-    def get_audio_features(
-        self,
-        input_features: torch.Tensor,
-        audio_feature_lengths: torch.LongTensor,
-        audio_chunk_mapping: Optional[torch.LongTensor] = None,
-    ) -> list[torch.Tensor]:
-        return self.model.get_audio_features(
-            input_features=input_features,
-            audio_feature_lengths=audio_feature_lengths,
-            audio_chunk_mapping=audio_chunk_mapping,
-        )
 
     def forward(
         self,
