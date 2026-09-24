@@ -133,8 +133,6 @@ class MossTranscribeDiarizeModel(MossTranscribeDiarizePreTrainedModel):
         )
         self.post_init()
 
-    def get_input_embeddings(self): return self.language_model.embed_tokens
-
     # ---- 4x time merge ---------------------------------------------------
 
     def time_merge(self, features: torch.Tensor) -> torch.Tensor:
@@ -232,7 +230,7 @@ class MossTranscribeDiarizeModel(MossTranscribeDiarizePreTrainedModel):
         audio_chunk_mapping: Optional[torch.LongTensor] = None,
         **kwargs,
     ):
-        inputs_embeds = self.get_input_embeddings()(input_ids)
+        inputs_embeds = self.language_model.embed_tokens(input_ids)
         inputs_embeds = self.inject_audio_features(
             input_ids=input_ids,
             inputs_embeds=inputs_embeds,
@@ -281,7 +279,6 @@ class MossTranscribeDiarizeForConditionalGeneration(MossTranscribeDiarizePreTrai
         logits_to_keep: int | torch.Tensor = 0,
         **kwargs,
     ):
-        return_dict = True if return_dict is None else return_dict
         outputs = self.model(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -301,21 +298,8 @@ class MossTranscribeDiarizeForConditionalGeneration(MossTranscribeDiarizePreTrai
         hidden_states = outputs.last_hidden_state
         slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
         logits = self.lm_head(hidden_states[:, slice_indices, :])
-
-        loss = None
-        if labels is not None:
-            loss = self.loss_function(
-                logits=logits,
-                labels=labels,
-                vocab_size=self.config.text_config.vocab_size,
-                **kwargs,
-            )
-
-        if not return_dict:
-            output = (logits,) + outputs[1:]
-            return (loss,) + output if loss is not None else output
         return CausalLMOutputWithPast(
-            loss=loss, logits=logits,
+            loss=None, logits=logits,
             past_key_values=outputs.past_key_values,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
