@@ -15,9 +15,132 @@ import os
 from transformers import GenerationMixin, PreTrainedModel
 from transformers import PretrainedConfig
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
-from transformers.configuration_utils import PreTrainedConfig
+from transformers.configuration_utils import PreTrainedConfig, GenerationConfig
+
+def remap_legacy_layer_types(
+    layer_types: list[str] | None = None, config: PreTrainedConfig | None = None
+) -> list[str] | None:
+    """
+    Remap legacy layer types to newer convention names. Any name that does not fit one of the `_LEGACY_LAYER_TYPE_REMAP`
+    patterns is returned unchanged.
+    This function can either take a list of `layer_types`, in which case a remapped list is returned, or a `config`,
+    in which case the config's `layer_types` and `mtp_layer_types` will be modified in-place, and nothing will be returned.
+
+    Args:
+        layer_types (`list[str]`, optional):
+            Layer type names that may include legacy values.
+        config (`PreTrainedConfig`, optional):
+            Config on which `layer_types` and `mtp_layer_types` will be remapped in-plce if they exist.
+
+
+    Returns:
+        `list[str]` if `layer_types` is passed, or `None` if `config` is passed.
+    """
+    if (layer_types is None) ^ (config is not None):
+        raise ValueError("This function must take exactly one of `layer_types` or `config`")
+
+    if layer_types is not None:
+        return [_LEGACY_LAYER_TYPE_REMAP.get(t, t) for t in layer_types]
+    else:
+        if getattr(config, "layer_types", None) is not None:
+            # This check should not be needed, but sometimes `layer_types` is a read-only @property (already following
+            # correct conventions), so this avoids error when trying to `setattr` it
+            if (remapped := remap_legacy_layer_types(config.layer_types)) != config.layer_types:
+                config.layer_types = remapped
+        if getattr(config, "mtp_layer_types", None) is not None:
+            # This check should not be needed, but sometimes `mtp_layer_types` is a read-only @property (already following
+            # correct conventions), so this avoids error when trying to `setattr` it
+            if (remapped := remap_legacy_layer_types(config.mtp_layer_types)) != config.mtp_layer_types:
+                config.mtp_layer_types = remapped
 
 class WhisperConfig(PreTrainedConfig):
+
+    def __post_init__(self, **kwargs):
+        # BC for the `torch_dtype` argument instead of the simpler `dtype`
+        # Do not warn, as it would otherwise always be triggered since most configs on the hub have `torch_dtype`
+        if (torch_dtype := kwargs.pop("torch_dtype", None)) is not None:
+            # If both are provided, keep `dtype`
+            self.dtype = self.dtype if self.dtype is not None else torch_dtype
+        if self.dtype is not None and isinstance(self.dtype, str) and is_torch_available():
+            # we will start using self.dtype in v5, but to be consistent with
+            # from_pretrained's dtype arg convert it to an actual torch.dtype object
+            import torch
+
+            self.dtype = getattr(torch, self.dtype)
+
+        # Keep the default value of `num_labels=2` in case users have saved a classifier with 2 labels
+        # Our configs prev wouldn't save `id2label` for 2 labels because it is the default. In all other
+        # cases we expect the config dict to have an `id2label` field if it's a clf model, or not otherwise
+        if self.id2label is None:
+            self.num_labels = kwargs.get("num_labels", self.num_labels if self.num_labels is not None else 2)
+        else:
+            if kwargs.get("num_labels") is not None and len(self.id2label) != kwargs.get("num_labels"):
+                logger.warning(
+                    f"You passed `num_labels={kwargs.get('num_labels')}` which is incompatible to "
+                    f"the `id2label` map of length `{len(self.id2label)}`."
+                )
+            # Keys are always strings in JSON so convert ids to int
+            self.id2label = {int(key): value for key, value in self.id2label.items()}
+
+        if self.problem_type == "single_label_classification" and self.num_labels == 1:
+            raise ValueError(
+                '`problem_type="single_label_classification"` requires `num_labels > 1`. For binary '
+                'classification use `num_labels=2`, or use `problem_type="regression"` for a '
+                "single-output regression head."
+            )
+
+        # BC for rotary embeddings. We will pop out legacy keys from kwargs and rename to new format
+        if hasattr(self, "rope_parameters"):
+            kwargs = self.convert_rope_params_to_dict(**kwargs)
+        elif kwargs.get("rope_scaling") and kwargs.get("rope_theta"):
+            logger.warning(
+                f"{self.__class__.__name__} got `key=rope_scaling` in kwargs but hasn't set it as attribute. "
+                "For RoPE standardization you need to set `self.rope_parameters` in model's config. "
+            )
+            kwargs = self.convert_rope_params_to_dict(**kwargs)
+
+        # Parameters for sequence generation saved in the config are popped instead of loading them.
+        for parameter_name in GenerationConfig._get_default_generation_params().keys():
+            kwargs.pop(parameter_name, None)
+
+        # Name or path to the pretrained checkpoint
+        self._name_or_path = str(kwargs.pop("name_or_path", ""))
+        # BC: configs saved by older versions may still carry this key, it is not used anymore. The revision of a
+        # repository is now resolved once per load and passed around as `revision` (see `utils.hub.resolve_revision`).
+        kwargs.pop("_commit_hash", None)
+
+        # Attention/Experts implementation to use, if relevant (it sets it recursively on sub-configs)
+        self._output_attentions: bool | None = kwargs.pop("output_attentions", False)
+        self._attn_implementation: str | None = kwargs.pop("attn_implementation", None)
+        self._experts_implementation: str | None = kwargs.pop("experts_implementation", None)
+
+        # HeterogeneousConfigMixin: `per_layer_config` should be applied last, as heterogeneity needs to have all of the other kwargs set
+        per_layer_config = kwargs.pop("per_layer_config", None)
+
+        # Additional attributes without default values
+        for key, value in kwargs.items():
+            # Check this to avoid deserializing problematic fields from hub configs - they should use the public field
+            if key not in ("_attn_implementation_internal", "_experts_implementation_internal"):
+                try:
+                    setattr(self, key, value)
+                except AttributeError as err:
+                    logger.error(f"Can't set {key} with value {value} for {self}")
+                    raise err
+
+        # HeterogeneousConfigMixin
+        if per_layer_config is not None:
+            self.per_layer_config = per_layer_config
+
+        # TODO: to support models whose input embedding module is not named `embed_tokens` (e.g. GPT-NeoX's `embed_in`).
+        if getattr(self, "tie_word_embeddings", False) and self.base_model_tp_plan is not None:
+            self.base_model_tp_plan = {
+                **self.base_model_tp_plan,
+                "embed_tokens": "embedding_rowwise",
+            }
+
+        # Remap layer types if needed
+        remap_legacy_layer_types(config=self)
+
     model_type = "whisper"
     keys_to_ignore_at_inference = ["past_key_values"]
     attribute_map = {
