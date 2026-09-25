@@ -6,7 +6,6 @@ import copy
 from pathlib import Path
 
 from transformers.audio_utils import load_audio
-from transformers.cache_utils import Cache
 from transformers.models.auto.auto_factory import _LazyAutoMapping
 from transformers.models.auto.configuration_auto import CONFIG_MAPPING_NAMES
 from typing import Optional
@@ -524,7 +523,7 @@ def _register_model_output_pytree_node(output_type: type[ModelOutput]) -> None:
 class CausalLMOutputWithPast(ModelOutput):
     loss: torch.FloatTensor | None = None
     logits: torch.FloatTensor | None = None
-    past_key_values: Cache | None = None
+    past_key_values: Any = None
     hidden_states: tuple[torch.FloatTensor, ...] | None = None
     attentions: tuple[torch.FloatTensor, ...] | None = None
 
