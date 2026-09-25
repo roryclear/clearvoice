@@ -13,7 +13,6 @@ from dataclasses import dataclass
 from collections import OrderedDict
 import os
 from transformers import GenerationMixin, PreTrainedModel
-from transformers import PretrainedConfig
 from transformers.configuration_utils import PreTrainedConfig
 
 class Qwen3Config(PreTrainedConfig):
@@ -285,7 +284,7 @@ class WhisperConfig(PreTrainedConfig):
     median_filter_width: int = 7
     tie_word_embeddings: bool = True
 
-class MossTranscribeDiarizeConfig(PretrainedConfig):
+class MossTranscribeDiarizeConfig(PreTrainedConfig):
     """Configuration for MOSS-Transcribe-Diarize: Qwen3 text backbone + Whisper audio encoder."""
 
     model_type = "moss_transcribe_diarize"
