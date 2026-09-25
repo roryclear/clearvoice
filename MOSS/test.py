@@ -1158,79 +1158,64 @@ class MossTranscribeDiarizeConfig(PreTrainedConfig):
         tie_word_embeddings: bool = True,
         **kwargs,
     ):
-        if text_config is None:
-            text_config = Qwen3Config(
-                vocab_size=151936,
-                hidden_size=1024,
-                intermediate_size=3072,
-                num_hidden_layers=28,
-                num_attention_heads=16,
-                num_key_value_heads=8,
-                head_dim=128,
-                max_position_embeddings=40960,
-                tie_word_embeddings=tie_word_embeddings,
-                rope_theta=1_000_000.0,
-                layer_types=["full_attention"] * 28,
-            )
-        elif isinstance(text_config, dict):
-            text_config = Qwen3Config()
-            text_config.attention_bias = False
-            text_config.attention_dropout = 0.0
-            text_config.bos_token_id = None
-            text_config.eos_token_id = None
-            text_config.head_dim = 128
-            text_config.hidden_act = "silu"
-            text_config.hidden_size = 1024
-            text_config.initializer_range = 0.02
-            text_config.intermediate_size = 3072
-            text_config.layer_types = [
-    "full_attention",
-    "full_attention",
-    "full_attention",
-    "full_attention",
-    "full_attention",
-    "full_attention",
-    "full_attention",
-    "full_attention",
-    "full_attention",
-    "full_attention",
-    "full_attention",
-    "full_attention",
-    "full_attention",
-    "full_attention",
-    "full_attention",
-    "full_attention",
-    "full_attention",
-    "full_attention",
-    "full_attention",
-    "full_attention",
-    "full_attention",
-    "full_attention",
-    "full_attention",
-    "full_attention",
-    "full_attention",
-    "full_attention",
-    "full_attention",
-    "full_attention"
-  ]
-            text_config.max_position_embeddings = 131072
-            text_config.max_window_layers = 28
-            text_config.model_type = "qwen3"
-            text_config.num_attention_heads = 16
-            text_config.num_hidden_layers = 28
-            text_config.num_key_value_heads = 8
-            text_config.pad_token_id = 151643
-            text_config.rms_norm_eps = 1e-6
-            text_config.rope_parameters = {
-    "rope_theta": 1000000,
-    "rope_type": "default"
-  }
-            text_config.sliding_window = None
-            text_config.tie_word_embeddings = True
-            text_config.transformers_version = "5.17.0"
-            text_config.use_cache = True
-            text_config.use_sliding_window = False
-            text_config.vocab_size = 151936
+        text_config = Qwen3Config()
+        text_config.attention_bias = False
+        text_config.attention_dropout = 0.0
+        text_config.bos_token_id = None
+        text_config.eos_token_id = None
+        text_config.head_dim = 128
+        text_config.hidden_act = "silu"
+        text_config.hidden_size = 1024
+        text_config.initializer_range = 0.02
+        text_config.intermediate_size = 3072
+        text_config.layer_types = [
+"full_attention",
+"full_attention",
+"full_attention",
+"full_attention",
+"full_attention",
+"full_attention",
+"full_attention",
+"full_attention",
+"full_attention",
+"full_attention",
+"full_attention",
+"full_attention",
+"full_attention",
+"full_attention",
+"full_attention",
+"full_attention",
+"full_attention",
+"full_attention",
+"full_attention",
+"full_attention",
+"full_attention",
+"full_attention",
+"full_attention",
+"full_attention",
+"full_attention",
+"full_attention",
+"full_attention",
+"full_attention"
+]
+        text_config.max_position_embeddings = 131072
+        text_config.max_window_layers = 28
+        text_config.model_type = "qwen3"
+        text_config.num_attention_heads = 16
+        text_config.num_hidden_layers = 28
+        text_config.num_key_value_heads = 8
+        text_config.pad_token_id = 151643
+        text_config.rms_norm_eps = 1e-6
+        text_config.rope_parameters = {
+"rope_theta": 1000000,
+"rope_type": "default"
+}
+        text_config.sliding_window = None
+        text_config.tie_word_embeddings = True
+        text_config.transformers_version = "5.17.0"
+        text_config.use_cache = True
+        text_config.use_sliding_window = False
+        text_config.vocab_size = 151936
 
         if audio_config is None:
             audio_config = WhisperConfig()
