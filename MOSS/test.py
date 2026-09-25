@@ -14,28 +14,86 @@ from collections import OrderedDict
 import os
 from transformers import GenerationMixin, PreTrainedModel
 from transformers import PretrainedConfig
-from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 from transformers.configuration_utils import PreTrainedConfig
+
+class Qwen3Config(PreTrainedConfig):
+    r"""
+    ```python
+    >>> from transformers import Qwen3Model, Qwen3Config
+
+    >>> # Initializing a Qwen3 style configuration
+    >>> configuration = Qwen3Config()
+
+    >>> # Initializing a model from the Qwen3-8B style configuration
+    >>> model = Qwen3Model(configuration)
+
+    >>> # Accessing the model configuration
+    >>> configuration = model.config
+    ```
+    """
+
+    model_type = "qwen3"
+    keys_to_ignore_at_inference = ["past_key_values"]
+
+    # Default tensor parallel plan for base model `Qwen3`
+    base_model_tp_plan = {
+        "layers.*.self_attn.q_proj": "colwise",
+        "layers.*.self_attn.k_proj": "colwise",
+        "layers.*.self_attn.v_proj": "colwise",
+        "layers.*.self_attn.q_norm": "replicated_with_grad_allreduce",
+        "layers.*.self_attn.k_norm": "replicated_with_grad_allreduce",
+        "layers.*.self_attn.o_proj": "rowwise",
+        "layers.*.mlp.gate_proj": "colwise",
+        "layers.*.mlp.up_proj": "colwise",
+        "layers.*.mlp.down_proj": "rowwise",
+    }
+    base_model_pp_plan = {
+        "embed_tokens": (["input_ids"], ["inputs_embeds"]),
+        "layers": (["hidden_states", "attention_mask"], ["hidden_states"]),
+        "norm": (["hidden_states"], ["hidden_states"]),
+    }
+
+    vocab_size: int = 151936
+    hidden_size: int = 4096
+    intermediate_size: int = 22016
+    num_hidden_layers: int = 32
+    num_attention_heads: int = 32
+    num_key_value_heads: int | None = 32
+    head_dim: int = 128
+    hidden_act: str = "silu"
+    max_position_embeddings: int = 32768
+    initializer_range: float = 0.02
+    rms_norm_eps: float = 1e-6
+    use_cache: bool = True
+    tie_word_embeddings: bool = False
+    rope_parameters = None
+    attention_bias: bool = False
+    use_sliding_window: bool = False
+    sliding_window: int | None = 4096
+    max_window_layers: int = 28
+    layer_types: list[str] | None = None
+    attention_dropout: float | int = 0.0
+    pad_token_id: int | None = None
+    bos_token_id: int | None = None
+    eos_token_id: int | list[int] | None = None
+
+    def __post_init__(self, **kwargs):
+        self.sliding_window = self.sliding_window if self.use_sliding_window else None
+        if self.num_key_value_heads is None:
+            self.num_key_value_heads = self.num_attention_heads
+
+        if self.layer_types is None:
+            self.layer_types = [
+                "sliding_attention"
+                if self.sliding_window is not None and i >= self.max_window_layers
+                else "full_attention"
+                for i in range(self.num_hidden_layers)
+            ]
+        super().__post_init__(**kwargs)
 
 def remap_legacy_layer_types(
     layer_types: list[str] | None = None, config: PreTrainedConfig | None = None
 ) -> list[str] | None:
-    """
-    Remap legacy layer types to newer convention names. Any name that does not fit one of the `_LEGACY_LAYER_TYPE_REMAP`
-    patterns is returned unchanged.
-    This function can either take a list of `layer_types`, in which case a remapped list is returned, or a `config`,
-    in which case the config's `layer_types` and `mtp_layer_types` will be modified in-place, and nothing will be returned.
-
-    Args:
-        layer_types (`list[str]`, optional):
-            Layer type names that may include legacy values.
-        config (`PreTrainedConfig`, optional):
-            Config on which `layer_types` and `mtp_layer_types` will be remapped in-plce if they exist.
-
-
-    Returns:
-        `list[str]` if `layer_types` is passed, or `None` if `config` is passed.
-    """
     if (layer_types is None) ^ (config is not None):
         raise ValueError("This function must take exactly one of `layer_types` or `config`")
 
