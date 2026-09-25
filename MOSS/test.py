@@ -345,15 +345,7 @@ class MossTranscribeDiarizeConfig(PreTrainedConfig):
         self.adaptor_input_dim = adaptor_input_dim or audio_config.d_model * audio_merge_size
         super().__init__(tie_word_embeddings=tie_word_embeddings, **kwargs)
 
-class MossTranscribeDiarizePreTrainedModel(PreTrainedModel):
-    config_class = MossTranscribeDiarizeConfig
-    base_model_prefix = "model"
-    input_modalities = ("audio", "text")
-    _no_split_modules = ["Qwen3DecoderLayer", "WhisperEncoderLayer"]
-    _skip_keys_device_placement = "past_key_values"
-    supports_gradient_checkpointing = True
-    _supports_sdpa = True
-    _supports_attention_backend = True
+class MossTranscribeDiarizePreTrainedModel(PreTrainedModel): config_class = MossTranscribeDiarizeConfig
 
 from transformers.models.qwen3.modeling_qwen3 import Qwen3Model
 from transformers.models.whisper.modeling_whisper import WhisperEncoder
