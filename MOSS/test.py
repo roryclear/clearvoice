@@ -345,7 +345,6 @@ class MossTranscribeDiarizeConfig(PreTrainedConfig):
         self.adaptor_input_dim = adaptor_input_dim or audio_config.d_model * audio_merge_size
         super().__init__(tie_word_embeddings=tie_word_embeddings, **kwargs)
 
-class MossTranscribeDiarizePreTrainedModel(PreTrainedModel): config_class = MossTranscribeDiarizeConfig
 
 from transformers.models.qwen3.modeling_qwen3 import Qwen3Model
 from transformers.models.whisper.modeling_whisper import WhisperEncoder
@@ -370,15 +369,9 @@ class VQAdaptor(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor: return self.layers(x)
 
-class MossTranscribeDiarizeModel(MossTranscribeDiarizePreTrainedModel):
+class MossTranscribeDiarizeModel(PreTrainedModel):
+    config_class = MossTranscribeDiarizeConfig
     base_model_prefix = "model"
-
-    """Single-stream multimodal backbone: Whisper-Medium encoder + Qwen3-0.6B.
-
-    Audio features are injected into text embeddings via ``masked_scatter`` at
-    positions marked by ``audio_token_id`` in ``input_ids``.
-    """
-
     def __init__(self, config: MossTranscribeDiarizeConfig):
         super().__init__(config)
 
@@ -504,7 +497,8 @@ class MossTranscribeDiarizeModel(MossTranscribeDiarizePreTrainedModel):
         return outputs
 
 
-class MossTranscribeDiarizeForConditionalGeneration(MossTranscribeDiarizePreTrainedModel, GenerationMixin):
+class MossTranscribeDiarizeForConditionalGeneration(PreTrainedModel, GenerationMixin):
+    config_class = MossTranscribeDiarizeConfig
     _tied_weights_keys = {"lm_head.weight": "model.language_model.embed_tokens.weight"}
 
     def __init__(self, config: MossTranscribeDiarizeConfig):
