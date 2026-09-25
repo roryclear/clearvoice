@@ -370,7 +370,6 @@ class VQAdaptor(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor: return self.layers(x)
 
 class MossTranscribeDiarizeModel(PreTrainedModel):
-    config_class = MossTranscribeDiarizeConfig
     base_model_prefix = "model"
     def __init__(self, config: MossTranscribeDiarizeConfig):
         super().__init__(config)
