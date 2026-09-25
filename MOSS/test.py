@@ -1,475 +1,534 @@
 import torch
-from transformers import AutoModelForCausalLM, AutoProcessor # remove first?
+from transformers import AutoProcessor # remove first?
 from typing import Any, Callable
 import numpy as np
 import copy
 from pathlib import Path
 
 from transformers.audio_utils import load_audio
+from transformers.cache_utils import Cache
 from transformers.models.auto.auto_factory import _LazyAutoMapping
-from transformers.models.auto.configuration_auto import CONFIG_MAPPING_NAMES, AutoConfig
-from transformers.configuration_utils import PreTrainedConfig
-from transformers.dynamic_module_utils import get_class_from_dynamic_module, resolve_trust_remote_code
-
-from transformers.utils import (
-    CONFIG_NAME,
-    cached_file,
-    extract_commit_hash,
-    find_adapter_config_file,
-    is_peft_available,
-)
-
+from transformers.models.auto.configuration_auto import CONFIG_MAPPING_NAMES
+from typing import Optional
 from dataclasses import dataclass
 from collections import OrderedDict
 import os
+from transformers import GenerationMixin, PreTrainedModel
+from transformers import PretrainedConfig
+from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
+from transformers.models.whisper.configuration_whisper import WhisperConfig
 
-def add_generation_mixin_to_remote_model(model_class):
+class MossTranscribeDiarizeConfig(PretrainedConfig):
+    """Configuration for MOSS-Transcribe-Diarize: Qwen3 text backbone + Whisper audio encoder."""
+
+    model_type = "moss_transcribe_diarize"
+    sub_configs = {"text_config": Qwen3Config, "audio_config": WhisperConfig}
+    keys_to_ignore_at_inference = ["past_key_values"]
+
+    def __init__(
+        self,
+        text_config=None,
+        audio_config=None,
+        audio_token_id: int = 151671,
+        audio_merge_size: int = 4,
+        adaptor_input_dim: int | None = None,
+        tie_word_embeddings: bool = True,
+        **kwargs,
+    ):
+        if text_config is None:
+            text_config = Qwen3Config(
+                vocab_size=151936,
+                hidden_size=1024,
+                intermediate_size=3072,
+                num_hidden_layers=28,
+                num_attention_heads=16,
+                num_key_value_heads=8,
+                head_dim=128,
+                max_position_embeddings=40960,
+                tie_word_embeddings=tie_word_embeddings,
+                rope_theta=1_000_000.0,
+                layer_types=["full_attention"] * 28,
+            )
+        elif isinstance(text_config, dict):
+            text_config = self.sub_configs["text_config"](**text_config)
+
+        if audio_config is None:
+            audio_config = WhisperConfig(
+                num_mel_bins=80,
+                d_model=1024,
+                encoder_layers=24,
+                encoder_attention_heads=16,
+                encoder_ffn_dim=4096,
+                max_source_positions=1500,
+                dropout=0.0,
+                attention_dropout=0.0,
+                activation_dropout=0.0,
+                activation_function="gelu",
+                encoder_layerdrop=0.0,
+                scale_embedding=False,
+            )
+        elif isinstance(audio_config, dict):
+            audio_config = self.sub_configs["audio_config"](**audio_config)
+
+        text_config.tie_word_embeddings = tie_word_embeddings
+
+        self.text_config = text_config
+        self.audio_config = audio_config
+        self.audio_token_id = audio_token_id
+        self.audio_merge_size = audio_merge_size
+        self.adaptor_input_dim = adaptor_input_dim or audio_config.d_model * audio_merge_size
+        super().__init__(tie_word_embeddings=tie_word_embeddings, **kwargs)
+
+class MossTranscribeDiarizePreTrainedModel(PreTrainedModel):
+    config_class = MossTranscribeDiarizeConfig
+    base_model_prefix = "model"
+    input_modalities = ("audio", "text")
+    _no_split_modules = ["Qwen3DecoderLayer", "WhisperEncoderLayer"]
+    _skip_keys_device_placement = "past_key_values"
+    supports_gradient_checkpointing = True
+    _supports_sdpa = True
+    _supports_attention_backend = True
+
+from transformers.models.qwen3.modeling_qwen3 import Qwen3Model
+from transformers.models.whisper.modeling_whisper import WhisperEncoder
+from torch import nn
+from transformers.utils import torch_compilable_check
+
+
+class VQAdaptor(nn.Module):
+    """Projects merged Whisper features to LM hidden dim.
+
+    ``Linear(in → hidden) → SiLU → Linear(hidden → hidden) → LayerNorm``
     """
-    Adds `GenerationMixin` to the inheritance of `model_class`, if `model_class` is a PyTorch model.
 
-    This function is used for backwards compatibility purposes: in v4.45, we've started a deprecation cycle to make
-    `PreTrainedModel` stop inheriting from `GenerationMixin`. Without this function, older models dynamically loaded
-    from the Hub may not have the `generate` method after we remove the inheritance.
+    def __init__(self, input_dim: int, hidden_size: int, norm_eps: float = 1e-6):
+        super().__init__()
+        self.layers = nn.Sequential(
+            nn.Linear(input_dim, hidden_size, bias=True),
+            nn.SiLU(),
+            nn.Linear(hidden_size, hidden_size, bias=True),
+            nn.LayerNorm(hidden_size, eps=norm_eps, bias=True),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor: return self.layers(x)
+
+class MossTranscribeDiarizeModel(MossTranscribeDiarizePreTrainedModel):
+    base_model_prefix = "model"
+
+    """Single-stream multimodal backbone: Whisper-Medium encoder + Qwen3-0.6B.
+
+    Audio features are injected into text embeddings via ``masked_scatter`` at
+    positions marked by ``audio_token_id`` in ``input_ids``.
     """
-    # 1. If it is not a PT model (i.e. doesn't inherit Module), do nothing
-    if "torch.nn.modules.module.Module" not in str(model_class.__mro__):
-        return model_class
 
-    # 2. If it already **directly** inherits from GenerationMixin, do nothing
-    if "GenerationMixin" in str(model_class.__bases__):
-        return model_class
+    def __init__(self, config: MossTranscribeDiarizeConfig):
+        super().__init__(config)
 
-    # 3. Prior to v4.45, we could detect whether a model was `generate`-compatible if it had its own `generate` and/or
-    # `prepare_inputs_for_generation` method.
-    has_custom_generate_in_class = hasattr(model_class, "generate") and "GenerationMixin" not in str(
-        getattr(model_class, "generate")
-    )
-    has_custom_prepare_inputs = hasattr(model_class, "prepare_inputs_for_generation") and "GenerationMixin" not in str(
-        getattr(model_class, "prepare_inputs_for_generation")
-    )
-    if has_custom_generate_in_class or has_custom_prepare_inputs:
-        model_class_with_generation_mixin = type(
-            model_class.__name__, (model_class, GenerationMixin), {**model_class.__dict__}
+        self.language_model: nn.Module = Qwen3Model(config.text_config)
+        self.whisper_encoder: nn.Module = WhisperEncoder(config.audio_config)
+        self.vq_adaptor: VQAdaptor = VQAdaptor(
+            input_dim=config.adaptor_input_dim,
+            hidden_size=config.text_config.hidden_size,
+            norm_eps=config.text_config.rms_norm_eps,
         )
-        return model_class_with_generation_mixin
-    return model_class
+        self.post_init()
 
-class _BaseAutoModelClass:
-    # Base class for auto models.
-    _model_mapping = None
+    # ---- 4x time merge ---------------------------------------------------
 
-    def __init__(self, *args, **kwargs) -> None:
-        raise OSError(
-            f"{self.__class__.__name__} is designed to be instantiated "
-            f"using the `{self.__class__.__name__}.from_pretrained(pretrained_model_name_or_path)` or "
-            f"`{self.__class__.__name__}.from_config(config)` methods."
+    def time_merge(self, features: torch.Tensor) -> torch.Tensor:
+        """``(B, T, D) -> (B, T//M, D*M)`` where M is ``audio_merge_size``."""
+        B, T, D = features.shape
+        merge_size = int(self.config.audio_merge_size)
+        T_trim = (T // merge_size) * merge_size
+        return features[:, :T_trim, :].reshape(B, T_trim // merge_size, D * merge_size)
+
+    # ---- audio feature extraction -----------------------------------------
+
+    def get_audio_features(
+        self,
+        input_features: torch.Tensor,
+        audio_feature_lengths: torch.LongTensor,
+        audio_chunk_mapping: Optional[torch.LongTensor] = None,
+    ) -> list[torch.Tensor]:
+        device = next(self.whisper_encoder.parameters()).device
+        encoder_dtype = next(self.whisper_encoder.parameters()).dtype
+        input_features = input_features.to(device=device, dtype=encoder_dtype)
+        audio_feature_lengths = audio_feature_lengths.to(device=device)
+
+        whisper_features = self.whisper_encoder(input_features, return_dict=True).last_hidden_state
+
+        chunk_mapping = (
+            audio_chunk_mapping.to(device=device)
+            if audio_chunk_mapping is not None
+            else torch.zeros(input_features.shape[0], dtype=torch.long, device=device)
         )
 
-    @classmethod
-    def from_config(cls, config, **kwargs):
-        trust_remote_code = kwargs.pop("trust_remote_code", None)
-        has_remote_code = hasattr(config, "auto_map") and cls.__name__ in config.auto_map
-        has_local_code = type(config) in cls._model_mapping
-        explicit_local_code = has_local_code and not _get_model_class(
-            config, cls._model_mapping
-        ).__module__.startswith("transformers.")
-        if has_remote_code:
-            class_ref = config.auto_map[cls.__name__]
-            if "--" in class_ref:
-                upstream_repo = class_ref.split("--")[0]
-            else:
-                upstream_repo = None
-            trust_remote_code = resolve_trust_remote_code(
-                trust_remote_code, config._name_or_path, has_local_code, has_remote_code, upstream_repo=upstream_repo
+        num_audios = int(chunk_mapping.max().item()) + 1 if chunk_mapping.numel() else 0
+        per_audio_chunks = [[] for _ in range(num_audios)]
+        for chunk_idx, token_len in enumerate(audio_feature_lengths.tolist()):
+            sample_idx = int(chunk_mapping[chunk_idx].item())
+            per_audio_chunks[sample_idx].append(
+                whisper_features[chunk_idx : chunk_idx + 1, : int(token_len) * 4]
             )
 
-        if has_remote_code and trust_remote_code and not explicit_local_code:
-            if "--" in class_ref:
-                repo_id, class_ref = class_ref.split("--")
-            else:
-                repo_id = config.name_or_path
-            model_class = get_class_from_dynamic_module(class_ref, repo_id, **kwargs)
-            cls.register(config.__class__, model_class, exist_ok=True)
-            model_class.register_for_auto_class(auto_class=cls)
-            _ = kwargs.pop("code_revision", None)
-            model_class = add_generation_mixin_to_remote_model(model_class)
-            return model_class._from_config(config, **kwargs)
-        elif has_local_code:
-            model_class = _get_model_class(config, cls._model_mapping)
-            text_config_class = config.sub_configs.get("text_config", None)
-            # getattr avoids AttributeError, as registered remote-code model classes may lack config_class
-            if text_config_class is not None and getattr(model_class, "config_class", None) == text_config_class:
-                # TODO: Validate that copying the parent quantization config to the text sub-config preserves
-                # modules_to_not_convert and skip-module matching when composite-model module prefixes differ.
-                parent_config = config
-                config = config.get_text_config()
-                # Check both `quantization_config` being present and also not null,
-                # as a `config.json` can have `"quantization_config": null` in it
-                parent_quant = getattr(parent_config, "quantization_config", None)
-                if parent_quant is not None:
-                    config.quantization_config = parent_quant
-            return model_class._from_config(config, **kwargs)
+        adapted = []
+        for parts in per_audio_chunks:
+            feat = torch.cat(parts, dim=1)
+            feat = feat.to(self.dtype)
+            merged = self.time_merge(feat)
+            adapted.append(self.vq_adaptor(merged))
+        return adapted
 
-        raise ValueError(
-            f"Unrecognized configuration class {config.__class__} for this kind of AutoModel: {cls.__name__}.\n"
-            f"Model type should be one of {', '.join(c.__name__ for c in cls._model_mapping)}."
+    # ---- inject audio into text embeddings --------------------------------
+
+    def get_placeholder_mask(
+        self,
+        input_ids: Optional[torch.LongTensor],
+        inputs_embeds: torch.FloatTensor,
+        audio_features: torch.Tensor,
+    ) -> torch.BoolTensor:
+        special_audio_mask = input_ids.to(device=inputs_embeds.device) == self.config.audio_token_id
+        special_audio_mask = special_audio_mask.unsqueeze(-1).expand_as(inputs_embeds).to(inputs_embeds.device)
+        return special_audio_mask
+
+    def inject_audio_features(
+        self,
+        input_ids,
+        inputs_embeds,
+        input_features,
+        audio_feature_lengths,
+        audio_chunk_mapping,
+    ):
+        """Replace audio placeholder positions with projected audio features."""
+        if input_features is None:
+            return inputs_embeds
+        audio_features = self.get_audio_features(
+            input_features=input_features,
+            audio_feature_lengths=audio_feature_lengths,
+            audio_chunk_mapping=audio_chunk_mapping,
+        )
+        audio_embeds = torch.cat([f.squeeze(0) for f in audio_features], dim=0)
+        audio_embeds = audio_embeds.to(inputs_embeds.device, inputs_embeds.dtype)
+        audio_mask = self.get_placeholder_mask(input_ids, inputs_embeds, audio_embeds)
+        return inputs_embeds.masked_scatter(audio_mask, audio_embeds)
+
+    # ---- forward ----------------------------------------------------------
+
+    def forward(
+        self,
+        input_ids: Optional[torch.LongTensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_values=None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        use_cache: Optional[bool] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+        input_features: Optional[torch.FloatTensor] = None,
+        audio_feature_lengths: Optional[torch.LongTensor] = None,
+        audio_chunk_mapping: Optional[torch.LongTensor] = None,
+        **kwargs,
+    ):
+        inputs_embeds = self.language_model.embed_tokens(input_ids)
+        inputs_embeds = self.inject_audio_features(
+            input_ids=input_ids,
+            inputs_embeds=inputs_embeds,
+            input_features=input_features,
+            audio_feature_lengths=audio_feature_lengths,
+            audio_chunk_mapping=audio_chunk_mapping,
+        )
+        outputs = self.language_model(
+            input_ids=None, attention_mask=attention_mask, position_ids=position_ids,
+            past_key_values=past_key_values, inputs_embeds=inputs_embeds,
+            use_cache=use_cache, **kwargs,
+        )
+        return outputs
+
+
+class MossTranscribeDiarizeForConditionalGeneration(MossTranscribeDiarizePreTrainedModel, GenerationMixin):
+    _tied_weights_keys = {"lm_head.weight": "model.language_model.embed_tokens.weight"}
+
+    def __init__(self, config: MossTranscribeDiarizeConfig):
+        super().__init__(config)
+        self.model = MossTranscribeDiarizeModel(config)
+        self.vocab_size = config.text_config.vocab_size
+        self.lm_head = nn.Linear(config.text_config.hidden_size, config.text_config.vocab_size, bias=False)
+        self.post_init()
+
+    def tie_weights(self, *args, **kwargs):
+        result = super().tie_weights(*args, **kwargs)
+        self.lm_head.weight = self.model.language_model.embed_tokens.weight
+        return result
+
+    def forward(
+        self,
+        input_ids: Optional[torch.LongTensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_values=None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        labels: Optional[torch.LongTensor] = None,
+        use_cache: Optional[bool] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+        input_features: Optional[torch.FloatTensor] = None,
+        audio_feature_lengths: Optional[torch.LongTensor] = None,
+        audio_chunk_mapping: Optional[torch.LongTensor] = None,
+        logits_to_keep: int | torch.Tensor = 0,
+        **kwargs,
+    ):
+        outputs = self.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=True,
+            input_features=input_features,
+            audio_feature_lengths=audio_feature_lengths,
+            audio_chunk_mapping=audio_chunk_mapping,
+            **kwargs,
         )
 
-    @classmethod
-    def _prepare_config_for_auto_class(cls, config: PreTrainedConfig) -> PreTrainedConfig:
-        """Additional autoclass-specific config post-loading manipulation. May be overridden in subclasses."""
-        return config
+        hidden_states = outputs.last_hidden_state
+        slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
+        logits = self.lm_head(hidden_states[:, slice_indices, :])
+        return CausalLMOutputWithPast(
+            loss=None, logits=logits,
+            past_key_values=outputs.past_key_values,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
+        )
+
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        past_key_values=None,
+        attention_mask=None,
+        inputs_embeds=None,
+        input_features=None,
+        audio_feature_lengths=None,
+        audio_chunk_mapping=None,
+        is_first_iteration=False,
+        use_cache=True,
+        **kwargs,
+    ):
+        model_inputs = super().prepare_inputs_for_generation(
+            input_ids,
+            past_key_values=past_key_values,
+            attention_mask=attention_mask, inputs_embeds=inputs_embeds,
+            is_first_iteration=is_first_iteration, use_cache=use_cache, **kwargs,
+        )
+        if input_features is not None and (is_first_iteration or not use_cache):
+            model_inputs["input_features"] = input_features
+            model_inputs["audio_feature_lengths"] = audio_feature_lengths
+            model_inputs["audio_chunk_mapping"] = audio_chunk_mapping
+        return model_inputs
+
+class _BaseAutoModelClass:
+    _model_mapping = _LazyAutoMapping(CONFIG_MAPPING_NAMES, OrderedDict([]))
+    def __init__(self, *args, **kwargs) -> None: pass
 
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path: str | os.PathLike[str], *model_args, **kwargs):
-        config = kwargs.pop("config", None)
-        trust_remote_code = kwargs.get("trust_remote_code")
         kwargs["_from_auto"] = True
-        hub_kwargs_names = [
-            "cache_dir",
-            "force_download",
-            "local_files_only",
-            "proxies",
-            "revision",
-            "subfolder",
-            "token",
-        ]
-        hub_kwargs = {name: kwargs.pop(name) for name in hub_kwargs_names if name in kwargs}
-        code_revision = kwargs.pop("code_revision", None)
-        commit_hash = kwargs.pop("_commit_hash", None)
-        adapter_kwargs = kwargs.pop("adapter_kwargs", None)
+        adapter_kwargs = None
 
-        token = hub_kwargs.pop("token", None)
-
-        if token is not None:
-            hub_kwargs["token"] = token
-
-        if commit_hash is None:
-            if not isinstance(config, PreTrainedConfig):
-                # We make a call to the config file first (which may be absent) to get the commit hash as soon as possible
-                resolved_config_file = cached_file(
-                    pretrained_model_name_or_path,
-                    CONFIG_NAME,
-                    _raise_exceptions_for_gated_repo=False,
-                    _raise_exceptions_for_missing_entries=False,
-                    _raise_exceptions_for_connection_errors=False,
-                    **hub_kwargs,
-                )
-                commit_hash = extract_commit_hash(resolved_config_file, commit_hash)
-            else:
-                commit_hash = getattr(config, "_commit_hash", None)
-
-        if is_peft_available():
-            if adapter_kwargs is None:
-                adapter_kwargs = {}
-            adapter_kwargs = adapter_kwargs.copy()  # avoid mutating original
-            if token is not None:
-                adapter_kwargs["token"] = token
-
-            maybe_adapter_path = find_adapter_config_file(
-                pretrained_model_name_or_path, _commit_hash=commit_hash, **adapter_kwargs
-            )
-
-            if maybe_adapter_path is not None:
-                with open(maybe_adapter_path, "r", encoding="utf-8") as f:
-                    adapter_config = json.load(f)
-
-                    adapter_kwargs["_adapter_model_path"] = pretrained_model_name_or_path
-                    # Only override the model name/path if the current value doesn't point to a
-                    # complete model with an embedded adapter so that local models with embedded
-                    # adapters will load from the local base model rather than pull the base
-                    # model named in the adapter's config from the hub.
-                    if not os.path.exists(pretrained_model_name_or_path) or not os.path.exists(
-                        os.path.join(pretrained_model_name_or_path, CONFIG_NAME)
-                    ):
-                        pretrained_model_name_or_path = adapter_config["base_model_name_or_path"]
-
-        if not isinstance(config, PreTrainedConfig):
-            kwargs_orig = copy.deepcopy(kwargs)
-            # ensure not to pollute the config object with dtype="auto" - since it's
-            # meaningless in the context of the config object - torch.dtype values are acceptable
-            if kwargs.get("torch_dtype") == "auto":
-                _ = kwargs.pop("torch_dtype")
-            if kwargs.get("dtype") == "auto":
-                _ = kwargs.pop("dtype")
-            # to not overwrite the quantization_config if config has a quantization_config
-            if kwargs.get("quantization_config") is not None:
-                _ = kwargs.pop("quantization_config")
-
-            config, kwargs = AutoConfig.from_pretrained(
-                pretrained_model_name_or_path,
-                return_unused_kwargs=True,
-                code_revision=code_revision,
-                _commit_hash=commit_hash,
-                **hub_kwargs,
-                **kwargs,
-            )
-
-            # A concrete dtype is absorbed into the config above and then dropped at the composite
-            # `get_text_config()` swap, so re-inject the user's value as an explicit kwarg to force the model's
-            # `from_pretrained` to honor it over the config's saved dtype (#46459).
-            if kwargs_orig.get("torch_dtype", None) is not None:
-                kwargs["torch_dtype"] = kwargs_orig["torch_dtype"]
-            if kwargs_orig.get("dtype", None) is not None:
-                kwargs["dtype"] = kwargs_orig["dtype"]
-            if kwargs_orig.get("quantization_config", None) is not None:
-                kwargs["quantization_config"] = kwargs_orig["quantization_config"]
-
-        has_remote_code = hasattr(config, "auto_map") and cls.__name__ in config.auto_map
-        has_local_code = type(config) in cls._model_mapping
-        explicit_local_code = has_local_code and not _get_model_class(
-            config, cls._model_mapping
-        ).__module__.startswith("transformers.")
-        upstream_repo = None
-        if has_remote_code:
-            class_ref = config.auto_map[cls.__name__]
-            if "--" in class_ref:
-                upstream_repo = class_ref.split("--")[0]
-        trust_remote_code = resolve_trust_remote_code(
-            trust_remote_code,
-            pretrained_model_name_or_path,
-            has_local_code,
-            has_remote_code,
-            upstream_repo=upstream_repo,
-        )
-        kwargs["trust_remote_code"] = trust_remote_code
-
-        # Set the adapter kwargs
         kwargs["adapter_kwargs"] = adapter_kwargs
+        
+        return MossTranscribeDiarizeForConditionalGeneration.from_pretrained(pretrained_model_name_or_path, *model_args, config=None, **kwargs)
 
-        if has_remote_code and trust_remote_code and not explicit_local_code:
-            model_class = get_class_from_dynamic_module(
-                class_ref, pretrained_model_name_or_path, code_revision=code_revision, **hub_kwargs, **kwargs
-            )
-            _ = hub_kwargs.pop("code_revision", None)
-            cls.register(config.__class__, model_class, exist_ok=True)
-            model_class.register_for_auto_class(auto_class=cls)
-            model_class = add_generation_mixin_to_remote_model(model_class)
-            return model_class.from_pretrained(
-                pretrained_model_name_or_path, *model_args, config=config, **hub_kwargs, **kwargs
-            )
-        elif has_local_code:
-            model_class = _get_model_class(config, cls._model_mapping)
-            text_config_class = config.sub_configs.get("text_config", None)
-            # getattr avoids AttributeError, as registered remote-code model classes may lack config_class
-            if text_config_class is not None and getattr(model_class, "config_class", None) == text_config_class:
-                # TODO: Validate that copying the parent quantization config to the text sub-config preserves
-                # modules_to_not_convert and skip-module matching when composite-model module prefixes differ.
-                parent_config = config
-                config = config.get_text_config()
-                # Check both `quantization_config` being present and also not null,
-                # as a `config.json` can have `"quantization_config": null` in it
-                parent_quant = getattr(parent_config, "quantization_config", None)
-                if parent_quant is not None:
-                    config.quantization_config = parent_quant
-            return model_class.from_pretrained(
-                pretrained_model_name_or_path, *model_args, config=config, **hub_kwargs, **kwargs
-            )
-        raise ValueError(
-            f"Unrecognized configuration class {config.__class__} for this kind of AutoModel: {cls.__name__}.\n"
-            f"Model type should be one of {', '.join(c.__name__ for c in cls._model_mapping)}."
-        )
+from dataclasses import fields
 
-    @classmethod
-    def register(cls, config_class, model_class, exist_ok=False) -> None:
+class ModelOutput(OrderedDict):
+    """
+    Base class for all model outputs as dataclass. Has a `__getitem__` that allows indexing by integer or slice (like a
+    tuple) or strings (like a dictionary) that will ignore the `None` attributes. Otherwise behaves like a regular
+    python dictionary.
+
+    <Tip warning={true}>
+
+    You can't unpack a `ModelOutput` directly. Use the [`~utils.ModelOutput.to_tuple`] method to convert it to a tuple
+    before.
+
+    </Tip>
+    """
+
+    def __init_subclass__(cls) -> None:
+        """Register subclasses as pytree nodes.
+
+        This is necessary to synchronize gradients when using `torch.nn.parallel.DistributedDataParallel` with
+        `static_graph=True` with modules that output `ModelOutput` subclasses.
         """
-        Register a new model for this class.
+        _register_model_output_pytree_node(cls)
 
-        Args:
-            config_class ([`PreTrainedConfig`]):
-                The configuration corresponding to the model to register.
-            model_class ([`PreTrainedModel`]):
-                The model to register.
-        """
-        if hasattr(model_class, "config_class") and model_class.config_class.__name__ != config_class.__name__:
-            raise ValueError(
-                "The model class you are passing has a `config_class` attribute that is not consistent with the "
-                f"config class you passed (model has {model_class.config_class} and you passed {config_class}. Fix "
-                "one of those so they match!"
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        _register_model_output_pytree_node(type(self))
+
+        # Subclasses of ModelOutput must use the @dataclass decorator
+        # This check is done in __init__ because the @dataclass decorator operates after __init_subclass__
+        # issubclass() would return True for issubclass(ModelOutput, ModelOutput) when False is needed
+        # Just need to check that the current class is not ModelOutput
+        is_modeloutput_subclass = self.__class__ != ModelOutput
+
+        if is_modeloutput_subclass and not is_dataclass(self):
+            raise TypeError(
+                f"{self.__module__}.{self.__class__.__name__} is not a dataclass."
+                " This is a subclass of ModelOutput and so must use the @dataclass decorator."
             )
-        cls._model_mapping.register(config_class, model_class, exist_ok=exist_ok)
+
+    def __post_init__(self):
+        """Check the ModelOutput dataclass.
+
+        Only occurs if @dataclass decorator has been used.
+        """
+        _register_model_output_pytree_node(type(self))
+        class_fields = fields(self)
+
+        # Safety and consistency checks
+        if not len(class_fields):
+            raise ValueError(f"{self.__class__.__name__} has no fields.")
+        if not all(field.default is None for field in class_fields[1:]):
+            raise ValueError(f"{self.__class__.__name__} should not have more than one required field.")
+
+        first_field = getattr(self, class_fields[0].name)
+        other_fields_are_none = all(self.__dict__.get(field.name) is None for field in class_fields[1:])
+
+        if other_fields_are_none and not is_tensor(first_field):
+            if isinstance(first_field, dict):
+                iterator = first_field.items()
+                first_field_iterator = True
+            else:
+                try:
+                    iterator = iter(first_field)
+                    first_field_iterator = True
+                except TypeError:
+                    first_field_iterator = False
+
+            # if we provided an iterator as first field and the iterator is a (key, value) iterator
+            # set the associated fields
+            if first_field_iterator:
+                # reset first field to None and remove it from the internal dictionary
+                setattr(self, class_fields[0].name, None)
+                super().__delitem__(class_fields[0].name)
+                for idx, element in enumerate(iterator):
+                    if not isinstance(element, (list, tuple)) or len(element) != 2 or not isinstance(element[0], str):
+                        if idx == 0:
+                            # If we do not have an iterator of key/values, set it as attribute
+                            self[class_fields[0].name] = first_field
+                        else:
+                            # If we have a mixed iterator, raise an error
+                            raise ValueError(
+                                f"Cannot set key/value for {element}. It needs to be a tuple (key, value)."
+                            )
+                        break
+                    setattr(self, element[0], element[1])
+                    if element[1] is not None:
+                        self[element[0]] = element[1]
+            elif first_field is not None:
+                self[class_fields[0].name] = first_field
+        else:
+            for field in class_fields:
+                v = self.__dict__.get(field.name)
+                if v is not None:
+                    self[field.name] = v
+
+    def __delitem__(self, *args, **kwargs):
+        raise Exception(f"You cannot use ``__delitem__`` on a {self.__class__.__name__} instance.")
+
+    def setdefault(self, *args, **kwargs):
+        raise Exception(f"You cannot use ``setdefault`` on a {self.__class__.__name__} instance.")
+
+    def pop(self, *args, **kwargs):
+        raise Exception(f"You cannot use ``pop`` on a {self.__class__.__name__} instance.")
+
+    def update(self, *args, **kwargs):
+        raise Exception(f"You cannot use ``update`` on a {self.__class__.__name__} instance.")
+
+    def __getitem__(self, k):
+        if isinstance(k, str):
+            inner_dict = dict(self.items())
+            return inner_dict[k]
+        else:
+            return self.to_tuple()[k]
+
+    def __setattr__(self, name, value):
+        field_names = {field.name for field in fields(self)}
+        if name in field_names and value is not None:
+            # Don't call self.__setitem__ to avoid recursion errors
+            super().__setitem__(name, value)
+        super().__setattr__(name, value)
+
+    def __setitem__(self, key, value):
+        # Will raise a KeyException if needed
+        super().__setitem__(key, value)
+        # Don't call self.__setattr__ to avoid recursion errors
+        super().__setattr__(key, value)
+
+    def __reduce__(self):
+        if not is_dataclass(self):
+            return super().__reduce__()
+        callable, _args, *remaining = super().__reduce__()
+        args = tuple(getattr(self, field.name) for field in fields(self))
+        return callable, args, *remaining
+
+    def to_tuple(self) -> tuple:
+        """
+        Convert self to a tuple containing all the attributes/keys that are not `None`.
+        """
+        return tuple(self[k] for k in self.keys())
+
+_registered_model_output_types: set[type[Any]] = set()
+def _model_output_flatten(output: ModelOutput) -> tuple[list[Any], list[str]]:
+    return list(output.values()), list(output.keys())
+from functools import partial
+from collections.abc import Callable, Iterable
+
+def _model_output_unflatten(
+    values: Iterable[Any],
+    context: list[str],
+    output_type: type[ModelOutput] | None = None,
+) -> ModelOutput:
+    return output_type(**dict(zip(context, values)))
+
+
+def _register_model_output_pytree_node(output_type: type[ModelOutput]) -> None:
+    import torch
+
+    # AMD CI runs PyTorch 2.8.0+rocm which does not support tracing `set.__contains__`
+    # through TorchDynamo. Skip registration during compilation since the pytree node
+    # is already registered from the preceding eager run.
+    if torch.compiler.is_compiling():
+        return
+    if output_type in _registered_model_output_types:
+        return
+
+    import torch.utils._pytree as torch_pytree
+
+    torch_pytree.register_pytree_node(
+        output_type,
+        _model_output_flatten,
+        partial(_model_output_unflatten, output_type=output_type),
+        serialized_type_name=f"{output_type.__module__}.{output_type.__name__}",
+        flatten_with_keys_fn=torch_pytree._dict_flatten_with_keys,
+    )
+    _registered_model_output_types.add(output_type)
+
+@dataclass
+class CausalLMOutputWithPast(ModelOutput):
+    loss: torch.FloatTensor | None = None
+    logits: torch.FloatTensor | None = None
+    past_key_values: Cache | None = None
+    hidden_states: tuple[torch.FloatTensor, ...] | None = None
+    attentions: tuple[torch.FloatTensor, ...] | None = None
 
 # todo just use needed entry...
-MODEL_FOR_CAUSAL_LM_MAPPING_NAMES = OrderedDict(
-    [
-        ("afmoe", "AfmoeForCausalLM"),
-        ("apertus", "ApertusForCausalLM"),
-        ("arcee", "ArceeForCausalLM"),
-        ("aria_text", "AriaTextForCausalLM"),
-        ("axk1", "AXK1ForCausalLM"),
-        ("axk2", "AXK2ForCausalLM"),
-        ("bamba", "BambaForCausalLM"),
-        ("bart", "BartForCausalLM"),
-        ("bert", "BertLMHeadModel"),
-        ("bert-generation", "BertGenerationDecoder"),
-        ("big_bird", "BigBirdForCausalLM"),
-        ("bigbird_pegasus", "BigBirdPegasusForCausalLM"),
-        ("biogpt", "BioGptForCausalLM"),
-        ("bitnet", "BitNetForCausalLM"),
-        ("blenderbot", "BlenderbotForCausalLM"),
-        ("blenderbot-small", "BlenderbotSmallForCausalLM"),
-        ("bloom", "BloomForCausalLM"),
-        ("blt", "BltForCausalLM"),
-        ("camembert", "CamembertForCausalLM"),
-        ("codegen", "CodeGenForCausalLM"),
-        ("cohere", "CohereForCausalLM"),
-        ("cohere2", "Cohere2ForCausalLM"),
-        ("cohere2_moe", "Cohere2MoeForCausalLM"),
-        ("cohere_compass_text", "CohereCompassForCausalLM"),
-        ("cpmant", "CpmAntForCausalLM"),
-        ("ctrl", "CTRLLMHeadModel"),
-        ("cwm", "CwmForCausalLM"),
-        ("data2vec-text", "Data2VecTextForCausalLM"),
-        ("dbrx", "DbrxForCausalLM"),
-        ("deepseek_v2", "DeepseekV2ForCausalLM"),
-        ("deepseek_v3", "DeepseekV3ForCausalLM"),
-        ("deepseek_v32", "DeepseekV32ForCausalLM"),
-        ("deepseek_v4", "DeepseekV4ForCausalLM"),
-        ("diffllama", "DiffLlamaForCausalLM"),
-        ("doge", "DogeForCausalLM"),
-        ("dots1", "Dots1ForCausalLM"),
-        ("electra", "ElectraForCausalLM"),
-        ("emu3", "Emu3ForCausalLM"),
-        ("ernie", "ErnieForCausalLM"),
-        ("ernie4_5", "Ernie4_5ForCausalLM"),
-        ("ernie4_5_moe", "Ernie4_5_MoeForCausalLM"),
-        ("exaone4", "Exaone4ForCausalLM"),
-        ("exaone_moe", "ExaoneMoeForCausalLM"),
-        ("falcon", "FalconForCausalLM"),
-        ("falcon_h1", "FalconH1ForCausalLM"),
-        ("falcon_mamba", "FalconMambaForCausalLM"),
-        ("flex_olmo", "FlexOlmoForCausalLM"),
-        ("fuyu", "FuyuForCausalLM"),
-        ("gemma", "GemmaForCausalLM"),
-        ("gemma2", "Gemma2ForCausalLM"),
-        ("gemma3", "Gemma3ForConditionalGeneration"),
-        ("gemma3_text", "Gemma3ForCausalLM"),
-        ("gemma3n", "Gemma3nForConditionalGeneration"),
-        ("gemma3n_text", "Gemma3nForCausalLM"),
-        ("gemma4", "Gemma4ForConditionalGeneration"),
-        ("gemma4_assistant", "Gemma4AssistantForCausalLM"),
-        ("gemma4_text", "Gemma4ForCausalLM"),
-        ("gemma4_unified", "Gemma4UnifiedForConditionalGeneration"),
-        ("gemma4_unified_assistant", "Gemma4UnifiedAssistantForCausalLM"),
-        ("gemma4_unified_text", "Gemma4UnifiedForCausalLM"),
-        ("git", "GitForCausalLM"),
-        ("glm", "GlmForCausalLM"),
-        ("glm4", "Glm4ForCausalLM"),
-        ("glm4_moe", "Glm4MoeForCausalLM"),
-        ("glm4_moe_lite", "Glm4MoeLiteForCausalLM"),
-        ("glm_moe_dsa", "GlmMoeDsaForCausalLM"),
-        ("got_ocr2", "GotOcr2ForConditionalGeneration"),
-        ("gpt-sw3", "GPT2LMHeadModel"),
-        ("gpt2", "GPT2LMHeadModel"),
-        ("gpt_bigcode", "GPTBigCodeForCausalLM"),
-        ("gpt_neo", "GPTNeoForCausalLM"),
-        ("gpt_neox", "GPTNeoXForCausalLM"),
-        ("gpt_neox_japanese", "GPTNeoXJapaneseForCausalLM"),
-        ("gpt_oss", "GptOssForCausalLM"),
-        ("gptj", "GPTJForCausalLM"),
-        ("granite", "GraniteForCausalLM"),
-        ("granite_swa", "GraniteSWAForCausalLM"),
-        ("granitemoe", "GraniteMoeForCausalLM"),
-        ("granitemoe_swa", "GraniteMoeSWAForCausalLM"),
-        ("granitemoehybrid", "GraniteMoeHybridForCausalLM"),
-        ("granitemoeshared", "GraniteMoeSharedForCausalLM"),
-        ("helium", "HeliumForCausalLM"),
-        ("hrm_text", "HrmTextForCausalLM"),
-        ("hunyuan_v1_dense", "HunYuanDenseV1ForCausalLM"),
-        ("hunyuan_v1_moe", "HunYuanMoEV1ForCausalLM"),
-        ("hy_v3", "HYV3ForCausalLM"),
-        ("hyperclovax", "HyperCLOVAXForCausalLM"),
-        ("inkling_text", "InklingForCausalLM"),
-        ("jais2", "Jais2ForCausalLM"),
-        ("jamba", "JambaForCausalLM"),
-        ("jetmoe", "JetMoeForCausalLM"),
-        ("laguna", "LagunaForCausalLM"),
-        ("lfm2", "Lfm2ForCausalLM"),
-        ("lfm2_moe", "Lfm2MoeForCausalLM"),
-        ("llama", "LlamaForCausalLM"),
-        ("llama4", "Llama4ForCausalLM"),
-        ("llama4_text", "Llama4ForCausalLM"),
-        ("longcat_flash", "LongcatFlashForCausalLM"),
-        ("mamba", "MambaForCausalLM"),
-        ("mamba2", "Mamba2ForCausalLM"),
-        ("marian", "MarianForCausalLM"),
-        ("mbart", "MBartForCausalLM"),
-        ("megatron-bert", "MegatronBertForCausalLM"),
-        ("mellum", "MellumForCausalLM"),
-        ("mimo_v2_flash", "MiMoV2FlashForCausalLM"),
-        ("minicpm3", "MiniCPM3ForCausalLM"),
-        ("minimax", "MiniMaxForCausalLM"),
-        ("minimax_m2", "MiniMaxM2ForCausalLM"),
-        ("minimax_m3_vl_text", "MiniMaxM3VLForCausalLM"),
-        ("ministral", "MinistralForCausalLM"),
-        ("ministral3", "Ministral3ForCausalLM"),
-        ("mistral", "MistralForCausalLM"),
-        ("mixtral", "MixtralForCausalLM"),
-        ("mllama", "MllamaForCausalLM"),
-        ("modernbert-decoder", "ModernBertDecoderForCausalLM"),
-        ("moshi", "MoshiForCausalLM"),
-        ("mpt", "MptForCausalLM"),
-        ("musicgen", "MusicgenForCausalLM"),
-        ("musicgen_melody", "MusicgenMelodyForCausalLM"),
-        ("mvp", "MvpForCausalLM"),
-        ("nanochat", "NanoChatForCausalLM"),
-        ("nemotron", "NemotronForCausalLM"),
-        ("nemotron_h", "NemotronHForCausalLM"),
-        ("olmo", "OlmoForCausalLM"),
-        ("olmo2", "Olmo2ForCausalLM"),
-        ("olmo3", "Olmo3ForCausalLM"),
-        ("olmo_hybrid", "OlmoHybridForCausalLM"),
-        ("olmoe", "OlmoeForCausalLM"),
-        ("openai-gpt", "OpenAIGPTLMHeadModel"),
-        ("opt", "OPTForCausalLM"),
-        ("pegasus", "PegasusForCausalLM"),
-        ("persimmon", "PersimmonForCausalLM"),
-        ("phi", "PhiForCausalLM"),
-        ("phi3", "Phi3ForCausalLM"),
-        ("phi4_multimodal", "Phi4MultimodalForCausalLM"),
-        ("phimoe", "PhimoeForCausalLM"),
-        ("plbart", "PLBartForCausalLM"),
-        ("prophetnet", "ProphetNetForCausalLM"),
-        ("qwen2", "Qwen2ForCausalLM"),
-        ("qwen2_moe", "Qwen2MoeForCausalLM"),
-        ("qwen3", "Qwen3ForCausalLM"),
-        ("qwen3_5", "Qwen3_5ForCausalLM"),  # VLM compatibility
-        ("qwen3_5_moe", "Qwen3_5MoeForCausalLM"),  # VLM compatibility
-        ("qwen3_5_moe_text", "Qwen3_5MoeForCausalLM"),
-        ("qwen3_5_text", "Qwen3_5ForCausalLM"),
-        ("qwen3_moe", "Qwen3MoeForCausalLM"),
-        ("qwen3_next", "Qwen3NextForCausalLM"),
-        ("qwen4_exp", "Qwen4ExpForCausalLM"),  # VLM compatibility
-        ("qwen4_exp_text", "Qwen4ExpForCausalLM"),
-        ("recurrent_gemma", "RecurrentGemmaForCausalLM"),
-        ("reformer", "ReformerModelWithLMHead"),
-        ("rembert", "RemBertForCausalLM"),
-        ("roberta", "RobertaForCausalLM"),
-        ("roberta-prelayernorm", "RobertaPreLayerNormForCausalLM"),
-        ("roc_bert", "RoCBertForCausalLM"),
-        ("roformer", "RoFormerForCausalLM"),
-        ("rwkv", "RwkvForCausalLM"),
-        ("seed_oss", "SeedOssForCausalLM"),
-        ("smollm3", "SmolLM3ForCausalLM"),
-        ("solar_open", "SolarOpenForCausalLM"),
-        ("stablelm", "StableLmForCausalLM"),
-        ("starcoder2", "Starcoder2ForCausalLM"),
-        ("trocr", "TrOCRForCausalLM"),
-        ("vaultgemma", "VaultGemmaForCausalLM"),
-        ("whisper", "WhisperForCausalLM"),
-        ("xglm", "XGLMForCausalLM"),
-        ("xlm", "XLMWithLMHeadModel"),
-        ("xlm-roberta", "XLMRobertaForCausalLM"),
-        ("xlm-roberta-xl", "XLMRobertaXLForCausalLM"),
-        ("xlnet", "XLNetLMHeadModel"),
-        ("xlstm", "xLSTMForCausalLM"),
-        ("xmod", "XmodForCausalLM"),
-        ("youtu", "YoutuForCausalLM"),
-        ("zamba", "ZambaForCausalLM"),
-        ("zamba2", "Zamba2ForCausalLM"),
-        ("zaya", "ZayaForCausalLM"),
-    ]
-)
 
 DEFAULT_PROMPT = (
     "请将音频转写为文本，每一段需以起始时间戳和说话人编号"
@@ -915,23 +974,14 @@ def parse_transcript(text: str, **parser_kwargs) -> list[TranscriptSegment]:
     segments.extend(parser.close())
     return segments
 
-MODEL_FOR_CAUSAL_LM_MAPPING = _LazyAutoMapping(CONFIG_MAPPING_NAMES, MODEL_FOR_CAUSAL_LM_MAPPING_NAMES)
-class AutoModelForCausalLM(_BaseAutoModelClass):
-    _model_mapping = MODEL_FOR_CAUSAL_LM_MAPPING
-    @classmethod
-    def from_pretrained(
-        cls: type["AutoModelForCausalLM"]
-    ):  
-        return super().from_pretrained("OpenMOSS-Team/MOSS-Transcribe-Diarize", dtype='auto', trust_remote_code=True)
-
 device = torch.device("cpu")
 dtype = torch.bfloat16 if device.type == "cuda" else torch.float32
-model = AutoModelForCausalLM.from_pretrained().to(dtype=dtype).to(device).eval()
+model = _BaseAutoModelClass.from_pretrained("OpenMOSS-Team/MOSS-Transcribe-Diarize").to(dtype=dtype).to(device).eval()
 
 model_id = "OpenMOSS-Team/MOSS-Transcribe-Diarize"
 audio_path = "MOSS/output.wav" # 10 mins for now
 
-processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+processor = AutoProcessor.from_pretrained(model_id)
 
 messages = build_transcription_messages(audio_path)
 result = generate_transcription(
