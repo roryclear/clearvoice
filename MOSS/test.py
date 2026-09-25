@@ -15,7 +15,7 @@ import os
 from transformers import GenerationMixin, PreTrainedModel
 from transformers import PretrainedConfig
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
-from transformers.configuration_utils import PreTrainedConfig, GenerationConfig
+from transformers.configuration_utils import PreTrainedConfig
 
 def remap_legacy_layer_types(
     layer_types: list[str] | None = None, config: PreTrainedConfig | None = None
@@ -52,6 +52,44 @@ def remap_legacy_layer_types(
             # correct conventions), so this avoids error when trying to `setattr` it
             if (remapped := remap_legacy_layer_types(config.mtp_layer_types)) != config.mtp_layer_types:
                 config.mtp_layer_types = remapped
+
+_get_default_generation_params = {
+            "max_length": 20,
+            "min_length": 0,
+            "do_sample": False,
+            "use_cache": True,
+            "early_stopping": False,
+            "num_beams": 1,
+            "temperature": 1.0,
+            "top_k": 50,
+            "top_p": 1.0,
+            "typical_p": 1.0,
+            "repetition_penalty": 1.0,
+            "length_penalty": 1.0,
+            "no_repeat_ngram_size": 0,
+            "encoder_no_repeat_ngram_size": 0,
+            "bad_words_ids": None,
+            "num_return_sequences": 1,
+            "output_scores": False,
+            "return_dict_in_generate": False,
+            "forced_bos_token_id": None,
+            "forced_eos_token_id": None,
+            "remove_invalid_values": False,
+            "exponential_decay_length_penalty": None,
+            "suppress_tokens": None,
+            "begin_suppress_tokens": None,
+            "epsilon_cutoff": 0.0,
+            "eta_cutoff": 0.0,
+            "encoder_repetition_penalty": 1.0,
+            "num_assistant_tokens": 20,
+            "num_assistant_tokens_schedule": "constant",
+            "assistant_confidence_threshold": 0.4,
+            "assistant_lookbehind": 10,
+            "target_lookbehind": 10,
+            # Deprecated arguments (moved to the Hub). TODO joao, manuel: remove in v4.62.0
+            "num_beam_groups": 1,
+            "diversity_penalty": 0.0,
+        }
 
 class WhisperConfig(PreTrainedConfig):
 
@@ -100,7 +138,7 @@ class WhisperConfig(PreTrainedConfig):
             kwargs = self.convert_rope_params_to_dict(**kwargs)
 
         # Parameters for sequence generation saved in the config are popped instead of loading them.
-        for parameter_name in GenerationConfig._get_default_generation_params().keys():
+        for parameter_name in _get_default_generation_params.keys():
             kwargs.pop(parameter_name, None)
 
         # Name or path to the pretrained checkpoint
