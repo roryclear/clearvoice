@@ -1217,22 +1217,19 @@ class MossTranscribeDiarizeConfig(PreTrainedConfig):
         text_config.use_sliding_window = False
         text_config.vocab_size = 151936
 
-        if audio_config is None:
-            audio_config = WhisperConfig()
-            audio_config.num_mel_bins=80
-            audio_config.d_model=1024
-            audio_config.encoder_layers=24
-            audio_config.encoder_attention_heads=16
-            audio_config.encoder_ffn_dim=4096
-            audio_config.max_source_positions=1500
-            audio_config.dropout=0.0
-            audio_config.attention_dropout=0.0
-            audio_config.activation_dropout=0.0
-            audio_config.activation_function="gelu"
-            audio_config.encoder_layerdrop=0.0
-            audio_config.scale_embedding=False
-        elif isinstance(audio_config, dict):
-            audio_config = WhisperConfig(**audio_config)
+        audio_config = WhisperConfig()
+        audio_config.num_mel_bins=80
+        audio_config.d_model=1024
+        audio_config.encoder_layers=24
+        audio_config.encoder_attention_heads=16
+        audio_config.encoder_ffn_dim=4096
+        audio_config.max_source_positions=1500
+        audio_config.dropout=0.0
+        audio_config.attention_dropout=0.0
+        audio_config.activation_dropout=0.0
+        audio_config.activation_function="gelu"
+        audio_config.encoder_layerdrop=0.0
+        audio_config.scale_embedding=False
 
         text_config.tie_word_embeddings = tie_word_embeddings
 
