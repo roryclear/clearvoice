@@ -17,7 +17,7 @@ from collections.abc import Iterator
 _LazyAutoMappingValue = tuple[type[Any] | None, type[Any] | None]
 _T = TypeVar("_T")
 
-class _LazyAutoMapping(OrderedDict[type[PreTrainedConfig], _LazyAutoMappingValue]):
+class _LazyAutoMapping(OrderedDict[Any, _LazyAutoMappingValue]):
     """
     A mapping config to object (model or tokenizer for instance) that will load keys and values when it is accessed.
 
@@ -38,7 +38,7 @@ class _LazyAutoMapping(OrderedDict[type[PreTrainedConfig], _LazyAutoMappingValue
         common_keys = set(self._config_mapping.keys()).intersection(self._model_mapping.keys())
         return len(common_keys) + len(self._extra_content)
 
-    def __getitem__(self, key: type[PreTrainedConfig]) -> _LazyAutoMappingValue:
+    def __getitem__(self, key: Any) -> _LazyAutoMappingValue:
         if key in self._extra_content:
             return self._extra_content[key]
         model_type = self._reverse_config_mapping[key.__name__]
@@ -60,7 +60,7 @@ class _LazyAutoMapping(OrderedDict[type[PreTrainedConfig], _LazyAutoMappingValue
             self._modules[module_name] = importlib.import_module(f".{module_name}", "transformers.models")
         return getattribute_from_module(self._modules[module_name], attr)
 
-    def keys(self) -> list[type[PreTrainedConfig]]:
+    def keys(self):
         mapping_keys = [
             self._load_attr_from_module(key, name)
             for key, name in self._config_mapping.items()
@@ -68,7 +68,7 @@ class _LazyAutoMapping(OrderedDict[type[PreTrainedConfig], _LazyAutoMappingValue
         ]
         return mapping_keys + list(self._extra_content.keys())
 
-    def get(self, key: type[PreTrainedConfig], default: _T) -> _LazyAutoMappingValue | _T:
+    def get(self, key: Any, default: _T) -> _LazyAutoMappingValue | _T:
         try:
             return self.__getitem__(key)
         except KeyError:
@@ -85,7 +85,7 @@ class _LazyAutoMapping(OrderedDict[type[PreTrainedConfig], _LazyAutoMappingValue
         ]
         return mapping_values + list(self._extra_content.values())
 
-    def items(self) -> list[tuple[type[PreTrainedConfig], _LazyAutoMappingValue]]:
+    def items(self) -> list[tuple[Any, _LazyAutoMappingValue]]:
         mapping_items = [
             (
                 self._load_attr_from_module(key, self._config_mapping[key]),
@@ -96,7 +96,7 @@ class _LazyAutoMapping(OrderedDict[type[PreTrainedConfig], _LazyAutoMappingValue
         ]
         return mapping_items + list(self._extra_content.items())
 
-    def __iter__(self) -> Iterator[type[PreTrainedConfig]]:
+    def __iter__(self):
         return iter(self.keys())
 
     def __contains__(self, item: type) -> bool:
@@ -107,7 +107,7 @@ class _LazyAutoMapping(OrderedDict[type[PreTrainedConfig], _LazyAutoMappingValue
         model_type = self._reverse_config_mapping[item.__name__]
         return model_type in self._model_mapping
 
-    def register(self, key: type[PreTrainedConfig] | str, value: _LazyAutoMappingValue, exist_ok=False) -> None:
+    def register(self, key: Any | str, value: _LazyAutoMappingValue, exist_ok=False) -> None:
         """
         Register a new model in this mapping.
         """
@@ -951,7 +951,7 @@ class Qwen3Config(PreTrainedConfig):
         super().__post_init__(**kwargs)
 
 def remap_legacy_layer_types(
-    layer_types: list[str] | None = None, config: PreTrainedConfig | None = None
+    layer_types: list[str] | None = None, config = None
 ) -> list[str] | None:
     if (layer_types is None) ^ (config is not None):
         raise ValueError("This function must take exactly one of `layer_types` or `config`")
@@ -1009,7 +1009,6 @@ _get_default_generation_params = {
         }
 
 class WhisperConfig(PreTrainedConfig):
-
     def __post_init__(self, **kwargs):
         # BC for the `torch_dtype` argument instead of the simpler `dtype`
         # Do not warn, as it would otherwise always be triggered since most configs on the hub have `torch_dtype`
@@ -1145,8 +1144,6 @@ class WhisperConfig(PreTrainedConfig):
     tie_word_embeddings: bool = True
 
 class MossTranscribeDiarizeConfig(PreTrainedConfig):
-    """Configuration for MOSS-Transcribe-Diarize: Qwen3 text backbone + Whisper audio encoder."""
-
     model_type = "moss_transcribe_diarize"
     sub_configs = {"text_config": Qwen3Config, "audio_config": WhisperConfig}
     keys_to_ignore_at_inference = ["past_key_values"]
