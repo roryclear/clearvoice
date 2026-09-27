@@ -266,12 +266,6 @@ class PreTrainedModel(
         _CAN_RECORD_REGISTRY[str(self.__class__)] = self._can_record_outputs  # added for executorch support only
 
     def post_init(self):
-        """
-        A method executed at the end of each Transformer model initialization, to execute code that needs the model's
-        modules properly initialized (such as weight initialization).
-        It is also used to obtain all correct static properties (parallelism plans, tied_weights_keys, _keep_in_fp32_modules, etc)
-        correctly in the case of composite models (that is, the top level model should know about those properties from its children).
-        """
         # Attach the different parallel plans and tied weight keys to the top-most model, so that everything is
         # easily available.
         self.init_parallel_plans()
@@ -288,35 +282,7 @@ class PreTrainedModel(
         self._keys_to_ignore_on_load_missing = set(self._keys_to_ignore_on_load_missing or [])
         self._keys_to_ignore_on_save = set(self._keys_to_ignore_on_save or [])
 
-        # Iterate over children only: as the final model is created, this is enough to gather the properties from all submodels.
-        # This works because the way the `__init__` and `post_init` are called on all submodules is depth-first in the graph
-        for name, module in self.named_children():
-            # Always attach the keys of the children (if the children's config says to NOT tie, then it's empty)
-            if tied_keys := getattr(module, "all_tied_weights_keys", None):
-                self.all_tied_weights_keys.update({f"{name}.{k}": f"{name}.{v}" for k, v in tied_keys.copy().items()})
-            # Record keep_in_fp_32 modules from the children as well
-            if keep_fp32 := getattr(module, "_keep_in_fp32_modules", None):
-                self._keep_in_fp32_modules.update(keep_fp32)
-            if keep_fp32_strict := getattr(module, "_keep_in_fp32_modules_strict", None):
-                self._keep_in_fp32_modules_strict.update(keep_fp32_strict)
-            # Record `_no_split_modules`/`_skip_keys_device_placement` from the children
-            if no_split := getattr(module, "_no_split_modules", None):
-                self._no_split_modules.update(no_split)
-            if skip_keys := getattr(module, "_skip_keys_device_placement", None):
-                self._skip_keys_device_placement.update(skip_keys)
-            # Record `_keys_to_ignore_on_load_unexpected/missing` from the children - note that we do not add the name (prefix)
-            # of the current module to the child's key, as this is matched by regex anyway and adding prefix could break the regex
-            if ignore_unexpected := getattr(module, "_keys_to_ignore_on_load_unexpected", None):
-                self._keys_to_ignore_on_load_unexpected.update(ignore_unexpected)
-            if ignore_missing := getattr(module, "_keys_to_ignore_on_load_missing", None):
-                self._keys_to_ignore_on_load_missing.update(ignore_missing)
-            # This one is matched exactly, not by regex, so we need to add the prefix
-            if ignore_save := getattr(module, "_keys_to_ignore_on_save", None):
-                self._keys_to_ignore_on_save.update({f"{name}.{k}" for k in ignore_save})
-
-        # Maybe initialize the weights and tie the keys
         self.init_weights()
-        self._backward_compatibility_gradient_checkpointing()
 
     def dequantize(self, dtype=None):
         """
