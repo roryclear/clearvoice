@@ -266,22 +266,7 @@ class PreTrainedModel(
         _CAN_RECORD_REGISTRY[str(self.__class__)] = self._can_record_outputs  # added for executorch support only
 
     def post_init(self):
-        # Attach the different parallel plans and tied weight keys to the top-most model, so that everything is
-        # easily available.
-        self.init_parallel_plans()
-        # Current submodel should register its tied weights
         self.all_tied_weights_keys = self.get_expanded_tied_weights_keys(all_submodels=False)
-        # Current submodel should register its `_keep_in_fp32_modules`
-        self._keep_in_fp32_modules = set(self._keep_in_fp32_modules or [])
-        self._keep_in_fp32_modules_strict = set(self._keep_in_fp32_modules_strict or [])
-        # Current submodel must register its `_no_split_modules`/`_skip_keys_device_placement` as well for device_map
-        self._no_split_modules = set(self._no_split_modules or [])
-        self._skip_keys_device_placement = set(self._skip_keys_device_placement or [])
-        # Current submodel must register the `_keys_to_ignore_on_load_unexpected/missing`
-        self._keys_to_ignore_on_load_unexpected = set(self._keys_to_ignore_on_load_unexpected or [])
-        self._keys_to_ignore_on_load_missing = set(self._keys_to_ignore_on_load_missing or [])
-        self._keys_to_ignore_on_save = set(self._keys_to_ignore_on_save or [])
-
         self.init_weights()
 
     def dequantize(self, dtype=None):
