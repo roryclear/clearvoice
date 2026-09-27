@@ -45,27 +45,7 @@ SpecificPreTrainedModelType = TypeVar("SpecificPreTrainedModelType", bound="PreT
 _is_ds_init_called = False
 ALL_ATTENTION_FUNCTIONS: AttentionInterface = AttentionInterface()
 
-class PreTrainedModel(
-    nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToHubMixin, PeftAdapterMixin, DistributedMixin
-):
-    r"""
-    Base class for all models.
-
-    [`PreTrainedModel`] takes care of storing the configuration of the models and handles methods for loading,
-    downloading and saving models as well as a few methods common to all models to:
-
-        - resize the input embeddings
-
-    Class attributes (overridden by derived classes):
-
-        - **config_class** ([`PreTrainedConfig`]) -- A subclass of [`PreTrainedConfig`] to use as configuration class
-          for this model architecture.
-        - **base_model_prefix** (`str`) -- A string indicating the attribute associated to the base model in derived
-          classes of the same architecture adding modules on top of the base model.
-        - **main_input_name** (`str`) -- The name of the principal input to the model (often `input_ids` for NLP
-          models, `pixel_values` for vision models and `input_values` for speech models).
-        - **can_record_outputs** (dict):
-    """
+class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToHubMixin, PeftAdapterMixin, DistributedMixin):
 
     # General model properties
     config_class: type[PreTrainedConfig] | None = None
@@ -123,88 +103,10 @@ class PreTrainedModel(
     # A mapping describing what outputs can be captured by `capture_outputs` decorator during the forward pass
     _can_record_outputs: dict | None = None
 
-    @property
-    def supports_context_parallel(self) -> bool:
-        """Whether this model can be trained with context parallelism.
-
-        Context parallelism shards the sequence and can only express full causal attention: the per-layer
-        mask is dropped, so a layer using a stricter mask (sliding-window or chunked attention) would
-        silently train as full causal instead. A layer carrying a recurrent state along the sequence
-        (linear attention) is ruled out for a different reason: the state is never exchanged between ranks.
-        """
-        if not self._supports_context_parallel:
-            return False
-        config = self.config.get_text_config()
-        layer_types = getattr(config, "layer_types", None)
-        if layer_types is not None:
-            return all(layer_type == "full_attention" for layer_type in layer_types)
-        # Models predating `layer_types` (Mistral, for one) apply a sliding window to every layer whenever
-        # `sliding_window` is set.
-        return getattr(config, "sliding_window", None) is None
-
-    @property
-    @torch.compiler.allow_in_graph
-    def can_record_outputs(self) -> dict[str, OutputRecorder]:
-        """
-         Maps output names (e.g., "attentions", "hidden_states")
-         to either:
-             - A module class (e.g., `LlamaDecoderLayer`), using default index conventions:
-                 * index = 0 for a key that contains "hidden_states" (e.g. "hidden_states" or "vision_hidden_states")
-                 * index = 1 for any other key: "attentions", "cross_attentions", etc.
-             - A class name as a string, when the class is not importable at declaration time.
-             - An `OutputRecorder(...)` with `target_class`, optional `index`, and `layer_name`.
-             - A list of any of the above, to record outputs from several module types under one key.
-
-         Examples:
-             These two are equivalent:
-
-         ```python
-             _can_record_outputs = {
-                 "attentions": LlamaAttention,
-                 "hidden_states": LlamaDecoderLayer
-             }
-
-             _can_record_outputs = {
-                 "attentions": OutputRecorder(LlamaAttention, index=1),
-                 "hidden_states": OutputRecorder(LlamaDecoderLayer, index=0)
-             }
-        ```
-
-         This means you can record outputs from the same class, by specifying a layer name. Before
-         collecting outputs, we check that they come from this layer.
-
-         If you have cross attention that come from `LlamaAttention` and self attention that also
-         come from `LlamaAttention` but from `self_attn` you can do this:
-
-         ```python
-         class LlamaModel(PreTrainedModel):
-             _can_record_outputs = {
-                 "attentions": OutputRecorder(LlamaAttention, index=1, layer_name="self_attn"),
-                 "cross_attentions": OutputRecorder(LlamaAttention, index=1, layer_name="cross_attn")
-             }
-
-        ```
-        """
-        return self._can_record_outputs or {}
-
-    @property
-    def dummy_inputs(self) -> dict[str, torch.Tensor]:
-        """
-        `dict[str, torch.Tensor]`: Dummy inputs to do a forward pass in the network.
-        """
-        return {"input_ids": torch.tensor(DUMMY_INPUTS)}
-
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
-        # For BC we keep the original `config_class` definition in case
-        # there is a `config_class` attribute (e.g. remote code models),
-        # otherwise we derive it from the annotated `config` attribute.
-
-        # defined in this particular subclass
         child_annotation = inspect.get_annotations(cls).get("config", None)
         child_attribute = cls.__dict__.get("config_class", None)
-
-        # defined in the class (this subclass or any parent class)
         full_annotation = get_type_hints(cls).get("config", None)
         full_attribute = cls.config_class
 
@@ -220,12 +122,6 @@ class PreTrainedModel(
 
     def __init__(self, config: PreTrainedConfig, *inputs, **kwargs):
         super().__init__()
-        if not isinstance(config, PreTrainedConfig):
-            raise TypeError(
-                f"Parameter config in `{self.__class__.__name__}(config)` should be an instance of class "
-                "`PreTrainedConfig`. To create a model from a pretrained model use "
-                f"`model = {self.__class__.__name__}.from_pretrained(PRETRAINED_MODEL_NAME)`"
-            )
         self.config = config
         self.name_or_path = config.name_or_path
 
@@ -246,7 +142,6 @@ class PreTrainedModel(
             self.config._experts_implementation
         )
         if self.can_generate():
-            # `from_model_config` is a legacy behavior -- we shouldn't set generation flags in the model config
             try:
                 self.generation_config = self.generation_config_class.from_model_config(config)
             except NotImplementedError:
@@ -2285,40 +2180,6 @@ class PreTrainedModel(
         if save_on_this_rank and self.is_remote_code():
             custom_object_save(self, save_directory, config=self.config)
 
-        # Save the config
-        if save_on_this_rank:
-            if not _hf_peft_config_loaded:
-                model_to_save.config.save_pretrained(save_directory)
-            if self.can_generate():
-                model_to_save.generation_config.save_pretrained(save_directory)
-
-            if _hf_peft_config_loaded:
-                logger.info(
-                    "Detected adapters on the model, saving the model in the PEFT format, only adapter weights will be saved."
-                )
-                state_dict = model_to_save.get_adapter_state_dict(state_dict=state_dict)
-
-                if save_peft_format:
-                    logger.info(
-                        "To match the expected format of the PEFT library, all keys of the state dict of adapters will be prepended with `base_model.model`."
-                    )
-                    peft_state_dict = {}
-                    for key, value in state_dict.items():
-                        peft_state_dict[f"base_model.model.{key}"] = value
-                    state_dict = peft_state_dict
-
-                active_adapter = self.active_adapters()
-
-                if len(active_adapter) > 1:
-                    raise ValueError(
-                        "Multiple active adapters detected, saving multiple active adapters is not supported yet. You can save adapters separately one by one "
-                        "by iteratively calling `model.set_adapter(adapter_name)` then `model.save_pretrained(...)`"
-                    )
-                active_adapter = active_adapter[0]
-
-                current_peft_config = self.peft_config[active_adapter]
-                current_peft_config.save_pretrained(save_directory)
-
         if distributed_checkpoint:
             hub_kwargs = {}
             if push_to_hub:
@@ -3206,18 +3067,16 @@ class PreTrainedModel(
         model.eval()  # Set model in evaluation mode to deactivate Dropout modules by default
         model.set_use_kernels(use_kernels, kernel_config)
 
-        # If it is a model with generation capabilities, attempt to load generation files (generation config,
-        # custom generate function)
-        if model.can_generate() and hasattr(model, "adjust_generation_fn") and not gguf_file:
-            model.adjust_generation_fn(
-                generation_config,
-                from_auto_class,
-                from_pipeline,
-                pretrained_model_name_or_path,
-                **download_kwargs,
-                trust_remote_code=trust_remote_code,
-                **kwargs,
-            )
+
+        model.adjust_generation_fn(
+            generation_config,
+            from_auto_class,
+            from_pipeline,
+            pretrained_model_name_or_path,
+            **download_kwargs,
+            trust_remote_code=trust_remote_code,
+            **kwargs,
+        )
 
         if hf_quantizer is not None:
             model.hf_quantizer = hf_quantizer
