@@ -45,65 +45,6 @@ SpecificPreTrainedModelType = TypeVar("SpecificPreTrainedModelType", bound="PreT
 _is_ds_init_called = False
 ALL_ATTENTION_FUNCTIONS: AttentionInterface = AttentionInterface()
 
-def resolve_revision(
-    path_or_repo_id: str | os.PathLike | None,
-    revision: str | None = None,
-    *,
-    repo_type: str | None = None,
-    token: bool | str | None = None,
-    local_files_only: bool = False,
-    cache_dir: str | os.PathLike | None = None,
-) -> str | None:
-    """
-    Best-effort resolution of a (possibly mutable) `revision` into the immutable commit it currently points to.
-
-    Every public loading entry point (`from_pretrained`, `pipeline`, ...) calls this once, then passes the returned
-    value as `revision` for the rest of that call. Two benefits:
-
-    - all the files of a single load come from the same repository state, even if the repo is updated in the meantime;
-    - all subsequent lookups are done against an immutable commit, so they can be served from the local cache
-      (including the "this file does not exist" cache) without any call to the Hub.
-
-    The returned [`~huggingface_hub.ResolvedRevision`] is a `str` equal to `revision`, so URLs and error messages keep
-    mentioning what the user asked for.
-
-    This is best effort: local folders are returned as-is, and any failure to resolve the revision (unknown or gated
-    repo, unreachable Hub, ...) returns `revision` unchanged so that the regular loading path applies, with its own
-    error messages and its own fallbacks to the cache.
-
-    Args:
-        path_or_repo_id (`str` or `os.PathLike`, *optional*):
-            A repo id on the Hub, or a path to a local directory or `None` (both returned as-is).
-        revision (`str`, *optional*):
-            The revision to resolve. `None` means the default branch of the repo.
-        repo_type (`str`, *optional*):
-            The type of the repo (`"model"` if not provided).
-        token (`str` or `bool`, *optional*):
-            The token to use as HTTP bearer authorization for remote files.
-        local_files_only (`bool`, *optional*, defaults to `False`):
-            If `True`, resolve the revision from the local cache only, without contacting the Hub.
-        cache_dir (`str` or `os.PathLike`, *optional*):
-            The cache the caller downloads to, where the `revision` -> commit hash mapping is recorded so that a later
-            offline load can still resolve `revision` locally.
-
-    Returns:
-        `Optional[str]`: The resolved revision, or `revision` if it could not be resolved.
-    """
-    if path_or_repo_id is None or os.path.exists(path_or_repo_id):
-        return revision
-
-    try:
-        return hf_api().resolve_revision(
-            str(path_or_repo_id),
-            repo_type=repo_type,
-            revision=revision,
-            cache_dir=cache_dir,
-            local_files_only=local_files_only or is_offline_mode(),
-            token=token,
-        )
-    except Exception:
-        return revision
-
 class PreTrainedModel(
     nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToHubMixin, PeftAdapterMixin, DistributedMixin
 ):
@@ -3138,13 +3079,6 @@ class PreTrainedModel(
         # Resolve the revision once and for all: config, weights, generation config and adapters are then all loaded
         # from the exact same repository state, without any further call to the Hub to revalidate a mutable revision.
         requested_revision = revision
-        revision = resolve_revision(
-            pretrained_model_name_or_path,
-            revision,
-            token=token,
-            local_files_only=local_files_only,
-            cache_dir=cache_dir,
-        )
 
         download_kwargs = {
             "cache_dir": cache_dir,
@@ -3156,45 +3090,14 @@ class PreTrainedModel(
             "subfolder": subfolder,
         }
 
-        if state_dict is not None and (pretrained_model_name_or_path is not None or gguf_file is not None):
-            raise ValueError(
-                "`state_dict` cannot be passed together with a model name or a `gguf_file`. Use one of the two loading strategies."
-            )
-
-        if device_map == "auto" and int(os.environ.get("WORLD_SIZE", "0")):
-            logger.info(
-                "You've set device_map=`auto` while triggering a distributed run with torchrun. This might lead to unexpected behavior. "
-                "If your plan is to load the model on each device, you should set device_map={"
-                ": PartialState().process_index} where PartialState comes from accelerate library"
-            )
 
         has_standalone_tp_args = tp_plan is not None or tp_size is not None
-
-        if distributed_config is not None and has_standalone_tp_args:
-            raise ValueError(
-                "Pass either `distributed_config` or the standalone `tp_plan`/`tp_size` arguments, not both. "
-                "Set tensor-parallel options on `DistributedConfig` when using it."
-            )
-
-        if tp_plan is not None:
-            warnings.warn(
-                "Passing `tp_plan` directly to `from_pretrained` is deprecated and will be removed in v5.18. "
-                "Pass it in `distributed_config=DistributedConfig(tp_plan=...)` instead.",
-                FutureWarning,
-                stacklevel=2,
-            )
-
-        if has_standalone_tp_args:
-            # For backwards compatibility, we still support passing `tp_plan` and `tp_size` directly to `from_pretrained`.
-            distributed_config = DistributedConfig(tp_plan=tp_plan, tp_size=tp_size)
 
         if distributed_config is not None:
             distributed_config, device_map, device_mesh = cls.prepare_distribute_model(
                 distributed_config, device_map=device_map
             )
 
-        if gguf_file is not None and not is_accelerate_available():
-            raise ValueError("accelerate is required when loading a GGUF file `pip install accelerate`.")
 
         if adapter_kwargs is None:
             adapter_kwargs = {}
@@ -3205,17 +3108,6 @@ class PreTrainedModel(
             download_kwargs,
             **adapter_kwargs,
         )
-        if pretrained_model_name_or_path != adapter_repo_id:
-            # We were pointed at an adapter, and now load the base model it refers to: the revision we resolved
-            # above belongs to the adapter repository, so resolve the base model's own.
-            revision = resolve_revision(
-                pretrained_model_name_or_path,
-                requested_revision,
-                token=token,
-                local_files_only=local_files_only,
-                cache_dir=cache_dir,
-            )
-            download_kwargs["revision"] = revision
         device_map = check_and_set_device_map(device_map)  # warn, error and fix the device map
 
         user_agent = {"file_type": "model", "framework": "pytorch", "from_auto_class": from_auto_class}
@@ -3340,10 +3232,6 @@ class PreTrainedModel(
         if distributed_config is not None:
             model = cls.maybe_distribute_model(model, distributed_config, device_mesh)
 
-        # Prepare the full device map
-        if device_map is not None:
-            device_map = _get_device_map(model, device_map, max_memory, hf_quantizer)
-
         # Finalize model weight initialization
         load_config = LoadStateDictConfig(
             pretrained_model_name_or_path=pretrained_model_name_or_path,
@@ -3379,10 +3267,6 @@ class PreTrainedModel(
                 trust_remote_code=trust_remote_code,
                 **kwargs,
             )
-
-        # If the device_map has more than 1 device or disk offloading: dispatch model with hooks
-        if device_map is not None and (len(set(device_map.values())) > 1 or "disk" in set(device_map.values())):
-            accelerate_dispatch(model, hf_quantizer, device_map, offload_folder, disk_offload_index, offload_buffers)
 
         if hf_quantizer is not None:
             model.hf_quantizer = hf_quantizer
@@ -3425,93 +3309,52 @@ class PreTrainedModel(
 
         # This offload index if for params explicitly on the "disk" in the device_map
         disk_offload_index = None
-        # Prepare parameters offloading if needed
-        if load_config.device_map is not None and "disk" in load_config.device_map.values():
-            disk_offload_index = accelerate_disk_offload(
-                model,
-                load_config.disk_offload_folder,
-                checkpoint_files,
-                load_config.device_map,
-                load_config.sharded_metadata,
-                load_config.weight_mapping,
-            )
 
-        # Warmup cuda to load the weights much faster on devices
-        if load_config.device_map is not None and not is_hqq_or_quark:
-            expanded_device_map = expand_device_map(load_config.device_map, expected_keys)
-            caching_allocator_warmup(model, expanded_device_map, load_config.hf_quantizer)
-
-        error_msgs = []
-
-        if is_deepspeed_zero3_enabled() and not is_quantized:
-            if state_dict is None:
-                merged_state_dict = {}
-                for ckpt_file in checkpoint_files:
-                    merged_state_dict.update(
-                        load_state_dict(
-                            ckpt_file,
-                            map_location="cpu",
-                            weights_only=load_config.weights_only,
-                            disable_mmap=load_config.disable_mmap,
-                        )
-                    )
-                state_dict = merged_state_dict
-            error_msgs, missing_keys = _load_state_dict_into_zero3_model(model, state_dict, load_config)
-            # This is not true but for now we assume only best-case scenario with deepspeed, i.e. perfectly matching checkpoints
-            loading_info = LoadStateDictInfo(
-                missing_keys=missing_keys,
-                error_msgs=error_msgs,
-                unexpected_keys=set(),
-                mismatched_keys=set(),
-                conversion_errors={},
-                skipped_pp_keys=set(),
-            )
+        all_pointer = set()
+        if state_dict is not None:
+            merged_state_dict = state_dict
+        elif checkpoint_files is not None and checkpoint_files[0].endswith(".safetensors") and state_dict is None:
+            merged_state_dict = {}
+            for file in checkpoint_files:
+                if load_config.disable_mmap or _is_on_hf_mount(file):
+                    with open(file, "rb") as _fh:
+                        merged_state_dict.update(_safe_load_bytes(_fh.read()))
+                    continue
+                is_mps = load_config.device_map is not None and any(
+                    (d.type if isinstance(d, torch.device) else d) == "mps"
+                    for d in load_config.device_map.values()
+                )
+                # Use pread on MPS (mmap incompatible) and Windows (mmap reserves
+                # copy-on-write commit charge for the entire file, exhausting memory
+                # for large multi-shard checkpoints).
+                if is_mps:
+                    backend, device = "pread", "mps"
+                elif sys.platform == "win32":
+                    backend, device = "pread", "cpu"
+                else:
+                    backend, device = "mmap", "cpu"
+                file_pointer = safe_open(file, framework="pt", device=device, backend=backend)
+                all_pointer.add(file_pointer)
+                for k in file_pointer.keys():
+                    merged_state_dict[k] = file_pointer.get_slice(k)  # don't materialize yet
+        # Checkpoints are .bin
+        elif checkpoint_files is not None:
+            merged_state_dict = {}
+            for ckpt_file in checkpoint_files:
+                merged_state_dict.update(load_state_dict(ckpt_file, disable_mmap=load_config.disable_mmap))
         else:
-            all_pointer = set()
-            if state_dict is not None:
-                merged_state_dict = state_dict
-            elif checkpoint_files is not None and checkpoint_files[0].endswith(".safetensors") and state_dict is None:
-                merged_state_dict = {}
-                for file in checkpoint_files:
-                    if load_config.disable_mmap or _is_on_hf_mount(file):
-                        with open(file, "rb") as _fh:
-                            merged_state_dict.update(_safe_load_bytes(_fh.read()))
-                        continue
-                    is_mps = load_config.device_map is not None and any(
-                        (d.type if isinstance(d, torch.device) else d) == "mps"
-                        for d in load_config.device_map.values()
-                    )
-                    # Use pread on MPS (mmap incompatible) and Windows (mmap reserves
-                    # copy-on-write commit charge for the entire file, exhausting memory
-                    # for large multi-shard checkpoints).
-                    if is_mps:
-                        backend, device = "pread", "mps"
-                    elif sys.platform == "win32":
-                        backend, device = "pread", "cpu"
-                    else:
-                        backend, device = "mmap", "cpu"
-                    file_pointer = safe_open(file, framework="pt", device=device, backend=backend)
-                    all_pointer.add(file_pointer)
-                    for k in file_pointer.keys():
-                        merged_state_dict[k] = file_pointer.get_slice(k)  # don't materialize yet
-            # Checkpoints are .bin
-            elif checkpoint_files is not None:
-                merged_state_dict = {}
-                for ckpt_file in checkpoint_files:
-                    merged_state_dict.update(load_state_dict(ckpt_file, disable_mmap=load_config.disable_mmap))
-            else:
-                raise ValueError("Neither a state dict nor checkpoint files were found.")
+            raise ValueError("Neither a state dict nor checkpoint files were found.")
 
-            loading_info, disk_offload_index = convert_and_load_state_dict_in_model(
-                model=model,
-                state_dict=merged_state_dict,
-                load_config=load_config,
-                disk_offload_index=disk_offload_index,
-            )
+        loading_info, disk_offload_index = convert_and_load_state_dict_in_model(
+            model=model,
+            state_dict=merged_state_dict,
+            load_config=load_config,
+            disk_offload_index=disk_offload_index,
+        )
 
-            # finally close all opened file pointers
-            for k in all_pointer:
-                k.__exit__(None, None, None)
+        # finally close all opened file pointers
+        for k in all_pointer:
+            k.__exit__(None, None, None)
 
         return loading_info, disk_offload_index
 
@@ -5254,20 +5097,6 @@ class WhisperEncoder(WhisperPreTrainedModel):
         attention_mask=None,
         **kwargs: Unpack[TransformersKwargs],
     ) -> BaseModelOutput:
-        r"""
-        Args:
-            input_features (`torch.LongTensor` of shape `(batch_size, feature_size, sequence_length)`):
-                Float values of mel features extracted from the raw speech waveform. Raw speech waveform can be
-                obtained by loading a `.flac` or `.wav` audio file into an array of type `list[float]`, a
-                `numpy.ndarray` or a `torch.Tensor`, *e.g.* via the torchcodec library (`pip install torchcodec`) or
-                the soundfile library (`pip install soundfile`). To prepare the array into
-                `input_features`, the [`AutoFeatureExtractor`] should be used for extracting the mel features, padding
-                and conversion into a tensor of type `torch.FloatTensor`. See [`~WhisperFeatureExtractor.__call__`]
-            attention_mask (`torch.Tensor`)`, *optional*):
-                Whisper does not support masking of the `input_features`, this argument is preserved for compatibility,
-                but it is not used. By default the silence in the input log mel spectrogram are ignored.
-        """
-
         expected_seq_length = self.config.max_source_positions * self.conv1.stride[0] * self.conv2.stride[0]
         if input_features.shape[-1] != expected_seq_length:
             raise ValueError(
@@ -6177,8 +6006,6 @@ def parse_transcript(text: str, **parser_kwargs) -> list[TranscriptSegment]:
     segments = parser.feed(text)
     segments.extend(parser.close())
     return segments
-
-
 
 device = torch.device("cpu")
 dtype = torch.bfloat16 if device.type == "cuda" else torch.float32
