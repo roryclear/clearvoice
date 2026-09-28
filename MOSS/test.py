@@ -103,47 +103,18 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
     # A mapping describing what outputs can be captured by `capture_outputs` decorator during the forward pass
     _can_record_outputs: dict | None = None
 
-
-
     def __init__(self, config: PreTrainedConfig, *inputs, **kwargs):
         super().__init__()
         self.config = config
         self.name_or_path = config.name_or_path
-
-        # Make kernel_config an attribute that can be used by the model.
         self.kernel_config = None
-
-        # Check the attention implementation is supported, or set it if not yet set (on the internal attr, to avoid
-        # setting it recursively)
+        # todo remove?
         self.config._attn_implementation_internal = self._check_and_adjust_attn_implementation(
             self.config._attn_implementation,
             is_init_check=True,
             # We need to use this constant that is set through context manager as it cannot be forwarded in the model's __init__
             allow_all_kernels=hub_kernels.ALLOW_ALL_KERNELS,
         )
-        # Check the experts implementation is supported, or set it if not yet set (on the internal attr, to avoid
-        # setting it recursively)
-        self.config._experts_implementation_internal = self._check_and_adjust_experts_implementation(
-            self.config._experts_implementation
-        )
-        if self.can_generate():
-            try:
-                self.generation_config = self.generation_config_class.from_model_config(config)
-            except NotImplementedError:
-                self.generation_config = self.generation_config_class()
-
-        # for initialization of the loss
-        loss_type = self.__class__.__name__
-        if loss_type not in LOSS_MAPPING:
-            loss_groups = f"({'|'.join(LOSS_MAPPING)})"
-            loss_type = re.findall(loss_groups, self.__class__.__name__)
-            if len(loss_type) > 0:
-                loss_type = loss_type[0]
-            else:
-                loss_type = None
-        self.loss_type = loss_type
-
-        _CAN_RECORD_REGISTRY[str(self.__class__)] = self._can_record_outputs  # added for executorch support only
 
     def post_init(self):
         self.all_tied_weights_keys = self.get_expanded_tied_weights_keys(all_submodels=False)
