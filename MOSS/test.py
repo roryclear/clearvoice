@@ -114,9 +114,6 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
     # todo are these even called?
     @classmethod
     def can_generate(cls) -> bool: return True
-    def _sdpa_can_dispatch(self, is_init_check: bool = False) -> bool: return True
-    def _grouped_mm_can_dispatch(self) -> bool: return True
-    def _flex_attn_can_dispatch(self, is_init_check: bool = False) -> bool: return True
 
     def set_attn_implementation(self, attn_implementation: str | dict, allow_all_kernels: bool = False):
         """
