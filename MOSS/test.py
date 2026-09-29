@@ -1173,47 +1173,7 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
 
         return dtype_plan
 
-    def set_use_kernels(self, use_kernels, kernel_config: KernelConfig | None = None, mode: "Mode | None" = None):
-        """
-        Set whether or not to use the `kernels` library to kernelize some layers of the model.
-        Args:
-            use_kernels (`bool`):
-                Whether or not to use the `kernels` library to kernelize some layers of the model.
-            kernel_config (`KernelConfig`, *optional*):
-                The kernel configuration to use to kernelize the model. If `None`, the default kernel mapping will be used.
-            mode (`Mode`, *optional*):
-                The mode that should be applied during `kernelize`. Optional, defaults to either training or inference mode
-                based on the internal `training` flag.
-        """
-        if use_kernels:
-            if not is_kernels_available():
-                raise ValueError(
-                    "Kernels are not available. "
-                    f"Please install a compatible version ({KERNELS_MIN_VERSION} <= version < {KERNELS_MAX_VERSION}), "
-                    f"e.g. `pip install kernels=={KERNELS_MIN_VERSION}`"
-                )
-            from .integrations.hub_kernels import register_kernel_mapping_transformers
-
-            register_kernel_mapping_transformers()
-
-            if kernel_config is not None:
-                if not isinstance(kernel_config, KernelConfig):
-                    raise ValueError(
-                        f"Expected `kernel_config` to be of type `KernelConfig` but got {type(kernel_config)}"
-                    )
-
-                # Since kernel_config is a correct value, set it as an attribute of the model so it can be used.
-                self.kernel_config = kernel_config
-
-                # This will make sure the mapping is valid, and the layers are registered in the model
-                kernel_config.sanitize_kernel_mapping(self)
-
-                # This will create a compatible mapping for the model with the kernels library
-                kernel_config.create_compatible_mapping(self)
-
-            kernelize(self, mode=mode)
-        else:
-            self._use_kernels = False
+    def set_use_kernels(self, use_kernels, kernel_config: KernelConfig | None = None, mode: "Mode | None" = None): self._use_kernels = False
 
     @classmethod
     def from_pretrained(
@@ -1882,70 +1842,6 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
                 )
 
             logger.warning_once(warn_string)
-
-    @property
-    def supports_tp_plan(self):
-        """
-        Returns whether the model has a tensor parallelism plan.
-        """
-        # Check if model has a TP plan
-        if self._tp_plan:
-            return True
-        # Check if base model has a TP plan
-        if self.base_model._tp_plan:
-            return True
-        # Check if config has TP plan
-        if self.config.base_model_tp_plan:
-            return True
-        return False
-
-    @property
-    def tp_size(self):
-        """
-        Returns the model's tensor parallelism degree.
-        """
-        # if None, the model didn't undergo tensor parallel sharding
-        return self._tp_size
-
-    @property
-    def fsdp_size(self):
-        """
-        Returns the model's FSDP sharding degree.
-        """
-        # if None, the model didn't undergo FSDP sharding
-        return self._fsdp_size
-
-    @property
-    def supports_pp_plan(self):
-        # Check if model has a PP plan
-        if self._pp_plan:
-            return True
-        # Check if base model has PP plan
-        if self.base_model._pp_plan:
-            return True
-        # Check if config has PP plan
-        if self.config.base_model_pp_plan:
-            return True
-        return False
-
-    @property
-    def loss_function(self):
-        if hasattr(self, "_loss_function"):
-            return self._loss_function
-
-        loss_type = getattr(self, "loss_type", None)
-
-        if loss_type is None or loss_type not in LOSS_MAPPING:
-            logger.warning_once(
-                f"`loss_type={loss_type}` was set in the config but it is unrecognized. "
-                f"Using the default loss: `ForCausalLMLoss`."
-            )
-            loss_type = "ForCausalLM"
-        return LOSS_MAPPING[loss_type]
-
-    @loss_function.setter
-    def loss_function(self, value):
-        self._loss_function = value
 
     @property
     def use_kernels(self) -> bool:
