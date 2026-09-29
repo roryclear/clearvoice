@@ -473,58 +473,6 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
                 mean_embeddings[None, :].repeat(added_num_tokens, 1).to(old_embeddings.weight.dtype)
             )
 
-    def _init_added_lm_head_weights_with_mean(
-        self,
-        old_lm_head,
-        new_lm_head,
-        old_lm_head_dim,
-        old_num_tokens,
-        added_num_tokens,
-        transposed: bool = False,
-    ):
-        if transposed:
-            # Transpose to the desired shape for the function.
-            new_lm_head.weight.data = new_lm_head.weight.data.T
-            old_lm_head.weight.data = old_lm_head.weight.data.T
-
-        # The same initialization logic as Embeddings.
-        self._init_added_embeddings_weights_with_mean(old_lm_head, new_lm_head, old_num_tokens, added_num_tokens)
-
-        if transposed:
-            # Transpose again to the correct shape.
-            new_lm_head.weight.data = new_lm_head.weight.data.T
-            old_lm_head.weight.data = old_lm_head.weight.data.T
-
-    def _init_added_lm_head_bias_with_mean(self, old_lm_head, new_lm_head, added_num_tokens):
-        bias_mean = torch.mean(old_lm_head.bias.data, axis=0, dtype=torch.float32)
-        bias_std = torch.std(old_lm_head.bias.data, axis=0).to(torch.float32)
-        new_lm_head.bias.data[-1 * added_num_tokens :].normal_(mean=bias_mean, std=1e-9 * bias_std)
-
-    def _copy_lm_head_original_to_resized(
-        self, new_lm_head, old_lm_head, num_tokens_to_copy, transposed, has_new_lm_head_bias
-    ):
-        # Copy old lm head weights to new lm head
-        if not transposed:
-            new_lm_head.weight.data[:num_tokens_to_copy, :] = old_lm_head.weight.data[:num_tokens_to_copy, :]
-        else:
-            new_lm_head.weight.data[:, :num_tokens_to_copy] = old_lm_head.weight.data[:, :num_tokens_to_copy]
-
-        # Copy bias weights to new lm head
-        if has_new_lm_head_bias:
-            new_lm_head.bias.data[:num_tokens_to_copy] = old_lm_head.bias.data[:num_tokens_to_copy]
-
-    def resize_position_embeddings(self, new_num_position_embeddings: int):
-        raise NotImplementedError(
-            f"`resize_position_embeddings` is not implemented for {self.__class__}`. To implement it, you should "
-            f"overwrite this method in the class {self.__class__} in `modeling_{self.__class__.__module__}.py`"
-        )
-
-    def get_position_embeddings(self) -> nn.Embedding | tuple[nn.Embedding]:
-        raise NotImplementedError(
-            f"`get_position_embeddings` is not implemented for {self.__class__}`. To implement it, you should "
-            f"overwrite this method in the class {self.__class__} in `modeling_{self.__class__.__module__}.py`"
-        )
-
     def init_weights(self):
         """
         Initialize and tie the weights if needed. If using a custom `PreTrainedModel`, you need to implement any
