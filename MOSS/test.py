@@ -444,22 +444,9 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
                 parent = self
             # Tie the weights
             setattr(parent, name, source_param)
-            self._adjust_bias(parent, source_param)
             # Remove from missing if necessary
             if missing_keys is not None and remove_from_missing:
                 missing_keys.discard(target_param_name)
-
-    def _adjust_bias(self, output_embeddings, input_embeddings):
-        if getattr(output_embeddings, "bias", None) is not None and hasattr(output_embeddings, "weight"):
-            weight_shape = output_embeddings.weight.shape
-            output_embeddings.bias.data = nn.functional.pad(
-                output_embeddings.bias.data,
-                (0, weight_shape[0] - output_embeddings.bias.shape[0]),
-                "constant",
-                0,
-            )
-        if hasattr(output_embeddings, "out_features") and hasattr(input_embeddings, "num_embeddings"):
-            output_embeddings.out_features = input_embeddings.num_embeddings
 
     def _init_added_embeddings_weights_with_mean(
         self, old_embeddings, new_embeddings, old_num_tokens, added_num_tokens
