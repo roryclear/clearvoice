@@ -1786,38 +1786,18 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
     def _finalize_model_loading(
         model, load_config: LoadStateDictConfig, loading_info: LoadStateDictInfo
     ) -> LoadStateDictInfo:
-        """Perform all post processing operations after having loaded some checkpoints into a model, such as moving
-        missing keys from meta device to their expected device, reinitializing missing weights according to proper
-        distributions, tying the weights and logging the loading report."""
-        try:
-            # Marks tied weights as `_is_hf_initialized` to avoid initializing them (it's very important for efficiency)
-            model.mark_tied_weights_as_initialized(loading_info)
+        model.mark_tied_weights_as_initialized(loading_info)
+        model._move_missing_keys_from_meta_to_device(
+            loading_info.missing_and_mismatched(),
+            load_config.device_map,
+            load_config.device_mesh,
+            load_config.hf_quantizer,
+        )
+        model.initialize_weights()
+        model.tie_weights(missing_keys=loading_info.missing_keys, recompute_mapping=False)
 
-            # Move missing (and potentially mismatched) keys and non-persistent buffers back to their expected device from
-            # meta device (because they were not moved when loading the weights as they were not in the loaded state dict)
-            model._move_missing_keys_from_meta_to_device(
-                loading_info.missing_and_mismatched(),
-                load_config.device_map,
-                load_config.device_mesh,
-                load_config.hf_quantizer,
-            )
-
-            # Correctly initialize the missing (and potentially mismatched) keys (all parameters without the `_is_hf_initialized` flag)
-            model._initialize_missing_keys(load_config.is_quantized)
-
-            # Tie the weights
-            model.tie_weights(missing_keys=loading_info.missing_keys, recompute_mapping=False)
-
-            # Adjust missing and unexpected keys
-            model._adjust_missing_and_unexpected_keys(loading_info)
-        finally:
-            log_state_dict_report(
-                model=model,
-                pretrained_model_name_or_path=load_config.pretrained_model_name_or_path,
-                ignore_mismatched_sizes=load_config.ignore_mismatched_sizes,
-                loading_info=loading_info,
-                logger=None,
-            )
+        # Adjust missing and unexpected keys
+        model._adjust_missing_and_unexpected_keys(loading_info)
 
         return loading_info
 
@@ -2068,42 +2048,6 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
             buffer_device = get_device(device_map, key, valid_torch_device=True)
             value = torch.empty_like(buffer, device=buffer_device)
             _load_parameter_into_model(self, key, value)
-
-    def _initialize_missing_keys(self, is_quantized: bool) -> None:
-        """
-        Initialize the missing keys (keys that are part of the model parameters, but were NOT found in the loaded state dicts), according to
-        `_initialize_weights`. Indeed, since the corresponding weights are missing from the state dict, they will not be replaced and need to
-        be initialized correctly (i.e. weight initialization distribution).
-
-        Also marks non-missing params/buffers with `_is_hf_initialized` and propagates this flag to modules,
-        so that `_initialize_weights` can skip fully-initialized modules entirely.
-        """
-        if is_fsdp_enabled() and not is_local_dist_rank_0():
-            # Handle FSDP edge case when using cpu ram efficient loading to ensure it is marked as initialized
-            # since it will get its weights broadcasted from rank0
-            # We actually need to do that only because we want to re-initialize non-persistent buffers with correct values.
-            # Everything else in the state_dict will be gathered from rank0, so we don't need re-initialization.
-            # We could simply early return after buffer inits if we had a way to init only the non-persistent buffers
-            for key in self.state_dict():
-                try:
-                    param_or_buffer = self.get_parameter_or_buffer(key)
-                    param_or_buffer._is_hf_initialized = True
-                except AttributeError:
-                    pass  # may happen when handling pre-quantized weights
-            self._is_hf_initialized = True
-
-        # This will only initialize submodules that are not marked as initialized by the line above.
-        if is_deepspeed_zero3_enabled() and not is_quantized:
-            import deepspeed
-
-            # keep_vars=True as we need the original tensors, so that the "_is_hf_initialized" is present on them
-            not_initialized_parameters = list(
-                {v for v in self.state_dict(keep_vars=True).values() if not getattr(v, "_is_hf_initialized", False)}
-            )
-            with deepspeed.zero.GatheredParameters(not_initialized_parameters, modifier_rank=0):
-                self.initialize_weights()
-        else:
-            self.initialize_weights()
 
     def _adjust_missing_and_unexpected_keys(self, loading_info: LoadStateDictInfo) -> None:
         """Adjust the `missing_keys` and `unexpected_keys` based on current model's exception rules, to avoid
