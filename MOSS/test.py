@@ -1773,16 +1773,6 @@ CONFIG_MAPPING_NAMES = OrderedDict(
     ]
 )
 
-CONFIG_MAPPING_NAMES.update(
-    {
-        "EvollaModel": "EvollaConfig",
-        "mlcd": "MLCDVisionConfig",
-        "parakeet_tdt": "ParakeetTDTConfig",
-        "vibevoice_acoustic_tokenizer_decoder": "VibeVoiceAcousticTokenizerDecoderConfig",
-        "vibevoice_acoustic_tokenizer_encoder": "VibeVoiceAcousticTokenizerEncoderConfig",
-    }
-)
-
 CONFIG_MAPPING_NAMES = OrderedDict(**{"gpt-sw3": "GPT2Config"}, **CONFIG_MAPPING_NAMES)
 
 class Qwen3Config(PreTrainedConfig):
