@@ -1786,21 +1786,6 @@ CONFIG_MAPPING_NAMES.update(
 CONFIG_MAPPING_NAMES = OrderedDict(**{"gpt-sw3": "GPT2Config"}, **CONFIG_MAPPING_NAMES)
 
 class Qwen3Config(PreTrainedConfig):
-    r"""
-    ```python
-    >>> from transformers import Qwen3Model, Qwen3Config
-
-    >>> # Initializing a Qwen3 style configuration
-    >>> configuration = Qwen3Config()
-
-    >>> # Initializing a model from the Qwen3-8B style configuration
-    >>> model = Qwen3Model(configuration)
-
-    >>> # Accessing the model configuration
-    >>> configuration = model.config
-    ```
-    """
-
     model_type = "qwen3"
     keys_to_ignore_at_inference = ["past_key_values"]
 
@@ -1859,64 +1844,6 @@ class Qwen3Config(PreTrainedConfig):
                 for i in range(self.num_hidden_layers)
             ]
         super().__post_init__(**kwargs)
-
-def remap_legacy_layer_types(
-    layer_types: list[str] | None = None, config = None
-) -> list[str] | None:
-    if (layer_types is None) ^ (config is not None):
-        raise ValueError("This function must take exactly one of `layer_types` or `config`")
-
-    if layer_types is not None:
-        return [_LEGACY_LAYER_TYPE_REMAP.get(t, t) for t in layer_types]
-    else:
-        if getattr(config, "layer_types", None) is not None:
-            # This check should not be needed, but sometimes `layer_types` is a read-only @property (already following
-            # correct conventions), so this avoids error when trying to `setattr` it
-            if (remapped := remap_legacy_layer_types(config.layer_types)) != config.layer_types:
-                config.layer_types = remapped
-        if getattr(config, "mtp_layer_types", None) is not None:
-            # This check should not be needed, but sometimes `mtp_layer_types` is a read-only @property (already following
-            # correct conventions), so this avoids error when trying to `setattr` it
-            if (remapped := remap_legacy_layer_types(config.mtp_layer_types)) != config.mtp_layer_types:
-                config.mtp_layer_types = remapped
-
-_get_default_generation_params = {
-            "max_length": 20,
-            "min_length": 0,
-            "do_sample": False,
-            "use_cache": True,
-            "early_stopping": False,
-            "num_beams": 1,
-            "temperature": 1.0,
-            "top_k": 50,
-            "top_p": 1.0,
-            "typical_p": 1.0,
-            "repetition_penalty": 1.0,
-            "length_penalty": 1.0,
-            "no_repeat_ngram_size": 0,
-            "encoder_no_repeat_ngram_size": 0,
-            "bad_words_ids": None,
-            "num_return_sequences": 1,
-            "output_scores": False,
-            "return_dict_in_generate": False,
-            "forced_bos_token_id": None,
-            "forced_eos_token_id": None,
-            "remove_invalid_values": False,
-            "exponential_decay_length_penalty": None,
-            "suppress_tokens": None,
-            "begin_suppress_tokens": None,
-            "epsilon_cutoff": 0.0,
-            "eta_cutoff": 0.0,
-            "encoder_repetition_penalty": 1.0,
-            "num_assistant_tokens": 20,
-            "num_assistant_tokens_schedule": "constant",
-            "assistant_confidence_threshold": 0.4,
-            "assistant_lookbehind": 10,
-            "target_lookbehind": 10,
-            # Deprecated arguments (moved to the Hub). TODO joao, manuel: remove in v4.62.0
-            "num_beam_groups": 1,
-            "diversity_penalty": 0.0,
-        }
 
 class WhisperConfig(PreTrainedConfig):
     def __post_init__(self, **kwargs): pass
