@@ -114,14 +114,7 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
     # todo are these even called?
     @classmethod
     def can_generate(cls) -> bool: return True
-
-    def get_experts_implementation(self) -> dict[str, str | None]: # todo remove?
-        experts_implementation = {"": self.config._experts_implementation}
-        for subconfig_key in self.config.sub_configs:
-            subconfig = getattr(self.config, subconfig_key, None)
-            if subconfig is not None:
-                experts_implementation[subconfig_key] = subconfig._experts_implementation
-        return experts_implementation
+    def get_experts_implementation(self) -> dict[str, str | None]: pass
 
     @torch.no_grad()
     def _init_weights(self, module):
