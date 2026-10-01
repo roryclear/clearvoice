@@ -682,104 +682,24 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
         device_mesh: "DeviceMeshLike | None",
         hf_quantizer: HfQuantizer | None,
     ) -> None:
-        """Move missing params/buffers off meta to their target device.
-
-        Loaded weights are handled earlier in `convert_and_load_state_dict_in_model`
-        via `DtensorShardOperation` and `set_param_for_module`. This only
-        materializes keys that were not loaded (or mismatched) so
-        `_initialize_missing_keys` can run proper init on them.
-        """
-        is_quantized = hf_quantizer is not None
-        # This is the only case where we do not initialize the model on meta device, so we don't have to do anything here
-        if is_deepspeed_zero3_enabled() and not is_quantized:
-            return
-
-        # In this case we need to move everything back
-        if is_fsdp_enabled() and not is_local_dist_rank_0() and not is_quantized:
-            for key, param in self.named_parameters():
-                value = torch.zeros_like(param, device="cpu")
-                _load_parameter_into_model(self, key, value)
-            for key, buffer in self.named_buffers():
-                value = torch.zeros_like(buffer, device="cpu")
-                _load_parameter_into_model(self, key, value)
-            return
-
-        # The tied weight keys are in the "missing" usually, but they should not be moved (they will be tied anyway)
-        # This is especially important because if they are moved, they will lose the `_is_hf_initialized` flag, and they
-        # will be re-initialized for nothing (which can be quite long)
-        for key in missing_keys - self.all_tied_weights_keys.keys():
-            param = self.get_parameter_or_buffer(key)
-            param_device = get_device(device_map, key, valid_torch_device=True)
-            value = torch.empty_like(param, device=param_device)
-            # For TP, we may need to shard the param
-            if is_dtensor(param):
-                local = torch.empty(param._local_tensor.shape, dtype=param.dtype, device=param_device)
-                value = torch.nn.Parameter(
-                    _dtensor_from_local_like(local, param),
-                    requires_grad=param.requires_grad,
-                )
-            _load_parameter_into_model(self, key, value)
-        # We need to move back non-persistent buffers as well, as they are not part of loaded weights anyway
         for key, buffer in self.named_non_persistent_buffers():
             buffer_device = get_device(device_map, key, valid_torch_device=True)
             value = torch.empty_like(buffer, device=buffer_device)
             _load_parameter_into_model(self, key, value)
 
     def _adjust_missing_and_unexpected_keys(self, loading_info: LoadStateDictInfo) -> None:
-        """Adjust the `missing_keys` and `unexpected_keys` based on current model's exception rules, to avoid
-        raising unneeded warnings/errors. This is performed in-place.
-        """
-        # Old checkpoints may have keys for rotary_emb.inv_freq for each layer, however we moved this buffer to the main model
-        # (so the buffer name has changed). Remove them in such a case. This is another exception that was not added to
-        # `_keys_to_ignore_on_load_unexpected` as it touches many models -> we add it manually to the existing patterns
         has_inv_freq_buffers = any(buffer.endswith("rotary_emb.inv_freq") for buffer, _ in self.named_buffers())
         additional_unexpected_patterns = {r"rotary_emb\.inv_freq"} if has_inv_freq_buffers else set()
-        # Same idea for `position_ids`: used to be a persistent buffer, now `persistent=False` in most models.
-        has_position_ids_buffers = any(buffer.endswith("position_ids") for buffer, _ in self.named_buffers())
-        if has_position_ids_buffers:
-            additional_unexpected_patterns.add(r"(^|\.)position_ids$")
-
-        missing_patterns = self._keys_to_ignore_on_load_missing or set()
         unexpected_patterns = (self._keys_to_ignore_on_load_unexpected or set()) | additional_unexpected_patterns
-        ignore_missing_regex, ignore_unexpected_regex = None, None
-        if len(missing_patterns) > 0:
-            ignore_missing_regex = re.compile("|".join(rf"({pattern})" for pattern in missing_patterns))
-        if len(unexpected_patterns) > 0:
-            ignore_unexpected_regex = re.compile("|".join(rf"({pattern})" for pattern in unexpected_patterns))
-
-        # Clean-up missing keys
-        if ignore_missing_regex is not None:
-            loading_info.missing_keys = {
-                key for key in loading_info.missing_keys if ignore_missing_regex.search(key) is None
-            }
-
-        # Clean-up unexpected keys
-        if ignore_unexpected_regex is not None:
-            loading_info.unexpected_keys = {
-                key for key in loading_info.unexpected_keys if ignore_unexpected_regex.search(key) is None
-            }
+        ignore_unexpected_regex = re.compile("|".join(rf"({pattern})" for pattern in unexpected_patterns))
+        loading_info.unexpected_keys = { key for key in loading_info.unexpected_keys if ignore_unexpected_regex.search(key) is None }
 
     def mark_tied_weights_as_initialized(self, loading_info):
-        """Adds the `_is_hf_initialized` flag on parameters that will be tied, in order to avoid initializing them
-        later as they will be tied (overwritten) anyway.
-        This is very important as most embeddings are tied, and they are huge params (vocabularies are often 256k), so
-        running inits on them is very costly."""
         for tied_param in getattr(self, "all_tied_weights_keys", {}).keys():
             param = self.get_parameter(tied_param)
             setattr(param, "_is_hf_initialized", True)
 
-        # Some custom code models define module tying (not parameter tying) in their __init__. When modules themselves are shared,
-        # weights inside both modules appear in the `state_dict` but only one will appear in the safetensors checkpoints
-        # as they are inherently tied because the 2 modules are the same object. In this case, once we load a parameter
-        # inside one of the 2 modules, the other will also automatically be loaded and will have the `_is_hf_initialized`
-        # flag (because we call `setattr` with the loaded param on the module, which is the same object), but its counterpart
-        # will still appear as a missing key as we never get it out of the set (because it appears in the state_dict as well).
-        # So we remove it now - otherwise it's considered missing and will be wrongly reinitialized
-        # Note: this is never an issue in main Transformers, as we never do module-tying, only parameter-tying, and we know
-        # which params are supposed to be tied to which other params
         if self.is_custom_code():
-            # Remove those that are already initialized, but appear as missing due to module tying (only if they are not known
-            # tied weights, i.e. we did not explicitly mark them as initialized just above)
             loading_info.missing_keys = {
                 key
                 for key in loading_info.missing_keys
