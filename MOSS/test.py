@@ -864,29 +864,7 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
                 or not getattr(self.get_parameter_or_buffer(key), "_is_hf_initialized", False)
             }
 
-    def get_parameter_or_buffer(self, target: str):
-        """
-        Return the parameter or buffer given by `target` if it exists, otherwise throw an error. This combines
-        `get_parameter()` and `get_buffer()` in a single handy function. If the target is an `_extra_state` attribute,
-        it will return the extra state provided by the module. Note that it only work if `target` is a leaf of the model.
-        """
-        try:
-            return self.get_parameter(target)
-        except AttributeError:
-            pass
-        try:
-            return self.get_buffer(target)
-        except AttributeError:
-            pass
-        module, param_name = get_module_from_name(self, target)
-        if (
-            param_name == "_extra_state"
-            and getattr(module.__class__, "get_extra_state", torch.nn.Module.get_extra_state)
-            is not torch.nn.Module.get_extra_state
-        ):
-            return module.get_extra_state()
-
-        raise AttributeError(f"`{target}` is neither a parameter, buffer, nor extra state.")
+    def get_parameter_or_buffer(self, target: str): return self.get_parameter(target)
 
     def named_non_persistent_buffers(
         self, recurse: bool = True, remove_duplicate: bool = True
@@ -928,14 +906,6 @@ _LazyAutoMappingValue = tuple[type[Any] | None, type[Any] | None]
 _T = TypeVar("_T")
 
 class _LazyAutoMapping(OrderedDict[Any, _LazyAutoMappingValue]):
-    """
-    A mapping config to object (model or tokenizer for instance) that will load keys and values when it is accessed.
-
-    Args:
-        - config_mapping: The map model type to config class
-        - model_mapping: The map model type to model (or tokenizer) class
-    """
-
     def __init__(self, config_mapping, model_mapping) -> None:
         self._config_mapping = config_mapping
         self._reverse_config_mapping = {v: k for k, v in config_mapping.items()}
@@ -963,12 +933,6 @@ class _LazyAutoMapping(OrderedDict[Any, _LazyAutoMappingValue]):
                 model_name = self._model_mapping[mtype]
                 return self._load_attr_from_module(mtype, model_name)
         raise KeyError(key)
-
-    def _load_attr_from_module(self, model_type, attr):
-        module_name = model_type_to_module_name(model_type)
-        if module_name not in self._modules:
-            self._modules[module_name] = importlib.import_module(f".{module_name}", "transformers.models")
-        return getattribute_from_module(self._modules[module_name], attr)
 
     def keys(self):
         mapping_keys = [
@@ -1560,8 +1524,7 @@ class MossTranscribeDiarizeForConditionalGeneration(PreTrainedModel, GenerationM
         )
 
         hidden_states = outputs.last_hidden_state
-        slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
-        logits = self.lm_head(hidden_states[:, slice_indices, :])
+        logits = self.lm_head(hidden_states[:, slice(-logits_to_keep, None) , :])
         return CausalLMOutputWithPast(
             loss=None, logits=logits,
             past_key_values=outputs.past_key_values,
