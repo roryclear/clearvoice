@@ -493,7 +493,7 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
             download_kwargs=download_kwargs,
             disable_mmap=disable_mmap,
         )
-        loading_info, disk_offload_index = cls._load_pretrained_model(model, state_dict, checkpoint_files, load_config)
+        loading_info = cls._load_pretrained_model(model, state_dict, checkpoint_files, load_config)
         loading_info = cls._finalize_model_loading(model, load_config, loading_info)
         model.eval()  # Set model in evaluation mode to deactivate Dropout modules by default
         model.set_use_kernels(use_kernels, kernel_config)
@@ -537,54 +537,16 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
         load_config: LoadStateDictConfig,
         expected_keys: list[str] | None = None,
     ) -> tuple[LoadStateDictInfo, dict]:
-        """Perform the actual loading of some checkpoints into a `model`, by reading them from disk and dispatching them accordingly."""
-        hf_quantizer = load_config.hf_quantizer
-        is_quantized = load_config.is_quantized
-        is_hqq_or_quark = hf_quantizer is not None and hf_quantizer.quantization_config.quant_method in {
-            QuantizationMethod.HQQ,
-            QuantizationMethod.QUARK,
-        }
-
-        # Model's definition arriving here is final (TP hooks added, quantized layers replaces)
-        expected_keys = list(model.state_dict().keys()) if expected_keys is None else expected_keys
-
-        # This offload index if for params explicitly on the "disk" in the device_map
         disk_offload_index = None
-
         all_pointer = set()
-        if state_dict is not None:
-            merged_state_dict = state_dict
-        elif checkpoint_files is not None and checkpoint_files[0].endswith(".safetensors") and state_dict is None:
-            merged_state_dict = {}
-            for file in checkpoint_files:
-                if load_config.disable_mmap or _is_on_hf_mount(file):
-                    with open(file, "rb") as _fh:
-                        merged_state_dict.update(_safe_load_bytes(_fh.read()))
-                    continue
-                is_mps = load_config.device_map is not None and any(
-                    (d.type if isinstance(d, torch.device) else d) == "mps"
-                    for d in load_config.device_map.values()
-                )
-                # Use pread on MPS (mmap incompatible) and Windows (mmap reserves
-                # copy-on-write commit charge for the entire file, exhausting memory
-                # for large multi-shard checkpoints).
-                if is_mps:
-                    backend, device = "pread", "mps"
-                elif sys.platform == "win32":
-                    backend, device = "pread", "cpu"
-                else:
-                    backend, device = "mmap", "cpu"
-                file_pointer = safe_open(file, framework="pt", device=device, backend=backend)
-                all_pointer.add(file_pointer)
-                for k in file_pointer.keys():
-                    merged_state_dict[k] = file_pointer.get_slice(k)  # don't materialize yet
-        # Checkpoints are .bin
-        elif checkpoint_files is not None:
-            merged_state_dict = {}
-            for ckpt_file in checkpoint_files:
-                merged_state_dict.update(load_state_dict(ckpt_file, disable_mmap=load_config.disable_mmap))
-        else:
-            raise ValueError("Neither a state dict nor checkpoint files were found.")
+        merged_state_dict = {}
+        for file in checkpoint_files:
+            #backend, device = "pread", "mps"
+            backend, device = "mmap", "cpu"
+            file_pointer = safe_open(file, framework="pt", device=device, backend=backend)
+            all_pointer.add(file_pointer)
+            for k in file_pointer.keys():
+                merged_state_dict[k] = file_pointer.get_slice(k)  # don't materialize yet
 
         loading_info, disk_offload_index = convert_and_load_state_dict_in_model(
             model=model,
@@ -592,12 +554,10 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
             load_config=load_config,
             disk_offload_index=disk_offload_index,
         )
-
-        # finally close all opened file pointers
         for k in all_pointer:
             k.__exit__(None, None, None)
 
-        return loading_info, disk_offload_index
+        return loading_info
 
     @staticmethod
     def _finalize_model_loading(
