@@ -896,35 +896,6 @@ class _LazyAutoMapping(OrderedDict[Any, _LazyAutoMappingValue]):
     def __iter__(self):
         return iter(self.keys())
 
-    def __contains__(self, item: type) -> bool:
-        if item in self._extra_content:
-            return True
-        if not hasattr(item, "__name__") or item.__name__ not in self._reverse_config_mapping:
-            return False
-        model_type = self._reverse_config_mapping[item.__name__]
-        return model_type in self._model_mapping
-
-    def register(self, key: Any | str, value: _LazyAutoMappingValue, exist_ok=False) -> None:
-        """
-        Register a new model in this mapping.
-        """
-        if hasattr(key, "__name__") and key.__name__ in self._reverse_config_mapping:
-            model_type = self._reverse_config_mapping[key.__name__]
-            if model_type in self._model_mapping and not exist_ok:
-                raise ValueError(f"'{key}' is already used by a Transformers model.")
-
-        # Some remote code may simply register a new custom model/processor/..., while using a native Transformers config. In such
-        # cases, we should skip registering, as we will otherwise always remap the native config to the custom model/processor/... in
-        # the same session, even if `trust_remote_code=False` is specified by the user (in which case we should use the native
-        # Transformers model/processor/... corresponding to the config)
-        # This is because remote/native is indistinguisable from the config class only in such cases, as they both use the same class - then
-        # `from_pretrained`/`from_config` are responsible to grab the correct class depending on whether `trust_remote_code` is True/False
-        if getattr(key, "__module__", "").startswith("transformers."):
-            return
-
-        # Register the new mapping (this will always take precedence in __getattr__ and __contains__ compared to base mapping)
-        self._extra_content[key] = value
-
     def __reduce__(self):
         return (
             self.__class__._from_pickle,
@@ -1215,12 +1186,6 @@ class WhisperEncoder(WhisperPreTrainedModel):
         attention_mask=None,
         **kwargs: Unpack[TransformersKwargs],
     ) -> BaseModelOutput:
-        expected_seq_length = self.config.max_source_positions * self.conv1.stride[0] * self.conv2.stride[0]
-        if input_features.shape[-1] != expected_seq_length:
-            raise ValueError(
-                f"Whisper expects the mel input features to be of length {expected_seq_length}, but found {input_features.shape[-1]}. Make sure to pad the input mel features to {expected_seq_length}."
-            )
-
         inputs_embeds = nn.functional.gelu(self.conv1(input_features))
         inputs_embeds = nn.functional.gelu(self.conv2(inputs_embeds))
 
@@ -1230,26 +1195,9 @@ class WhisperEncoder(WhisperPreTrainedModel):
         hidden_states = inputs_embeds + self.embed_positions(all_positions)
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
 
-        for idx, encoder_layer in enumerate(self.layers):
-            # add LayerDrop (see https://huggingface.co/papers/1909.11556 for description)
-            to_drop = False
-            if self.training:
-                dropout_probability = torch.rand([])
-                if dropout_probability < self.layerdrop:  # skip the layer
-                    to_drop = True
-
-            if not to_drop:
-                hidden_states = encoder_layer(
-                    hidden_states,
-                    None,
-                    **kwargs,
-                )
-
+        for _, encoder_layer in enumerate(self.layers): hidden_states = encoder_layer(hidden_states, None, **kwargs,)
         hidden_states = self.layer_norm(hidden_states)
-
-        return BaseModelOutput(
-            last_hidden_state=hidden_states,
-        )
+        return BaseModelOutput(last_hidden_state=hidden_states,)
 
 
 class VQAdaptor(nn.Module):
