@@ -601,75 +601,8 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
 
         return retrieved_modules
 
-    @classmethod
-    def register_for_auto_class(cls, auto_class="AutoModel"):
-        """
-        Register this class with a given auto class. This should only be used for custom models as the ones in the
-        library are already mapped with an auto class.
-
-
-
-        Args:
-            auto_class (`str` or `type`, *optional*, defaults to `"AutoModel"`):
-                The auto class to register this new model with.
-        """
-        if not isinstance(auto_class, str):
-            auto_class = auto_class.__name__
-
-        import transformers.models.auto as auto_module
-
-        if not hasattr(auto_module, auto_class):
-            raise ValueError(f"{auto_class} is not a valid auto class.")
-
-        cls._auto_class = auto_class
-
     @property
-    def use_kernels(self) -> bool:
-        return getattr(self, "_use_kernels", False)
-
-    @use_kernels.setter
-    def use_kernels(self, value: bool) -> None:
-        # Avoid re-kernelizing if already enabled
-        if bool(value) and getattr(self, "_use_kernels", False):
-            return
-
-        if value:
-            self.set_use_kernels(True)
-        else:
-            if getattr(self, "_use_kernels", False):
-                logger.warning_once(
-                    "Disabling kernels at runtime is a no-op as there is no 'unkernelize' routine; keeping current kernels active."
-                )
-            self._use_kernels = False
-
-    def _default_compile_config(self) -> CompileConfig:
-        """Build the default `CompileConfig` for `get_compiled_call`.
-
-        Inductor + `reduce-overhead` (the `CompileConfig` defaults) target CUDA.
-        torch_tpu registers its own TorchDynamo backend named `"tpu"`; route
-        `device.type == "tpu"` through it with static shapes to match the
-        common StaticCache + fixed-prefill usage."""
-        if self.device.type == "tpu":
-            return CompileConfig(backend="tpu", dynamic=False, mode="default")
-        return CompileConfig()
-
-    def get_compiled_call(self, compile_config: CompileConfig | None) -> Callable:
-        """Return a `torch.compile`'d version of `self.__call__`. This is useful to dynamically choose between
-        non-compiled/compiled `forward` during inference, especially to switch between prefill (where we don't
-        want to use compiled version to avoid recomputing the graph with new shapes) and iterative decoding
-        (where we want the speed-ups of compiled version with static shapes)."""
-        # Only reset it if not present or different from previous config
-        if "llama4" in self.config.model_type:  # TODO try to enable for FULL COMPILE HYBRID CACHE SUPPORT
-            return self.__call__
-        compile_config = compile_config or self._default_compile_config()
-        default_config = getattr(self.generation_config, "compile_config", None) or self._default_compile_config()
-        if (
-            not hasattr(self, "_compiled_call")
-            or getattr(self, "_last_compile_config", default_config) != compile_config
-        ):
-            self._last_compile_config = compile_config
-            self._compiled_call = torch.compile(self.__call__, **compile_config.to_dict())
-        return self._compiled_call
+    def use_kernels(self) -> bool: return getattr(self, "_use_kernels", False)
 
     @classmethod
     def is_backend_compatible(cls):
