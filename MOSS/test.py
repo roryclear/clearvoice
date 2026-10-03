@@ -6,7 +6,6 @@ import copy
 from pathlib import Path
 
 from transformers.audio_utils import load_audio
-from typing import Optional, TypeVar, get_type_hints
 from dataclasses import dataclass
 from collections import OrderedDict
 import os
@@ -15,36 +14,25 @@ from transformers.configuration_utils import PreTrainedConfig
 from collections.abc import Iterator
 from torch import nn
 from transformers.modeling_utils import EmbeddingAccessMixin, ModuleUtilsMixin, PushToHubMixin, PeftAdapterMixin, DistributedMixin, KernelConfig, LoadStateDictConfig, _get_resolved_checkpoint_files, _get_dtype, local_torch_dtype, ContextManagers, AttentionInterface\
-,get_torch_context_manager_or_global_device, _is_on_hf_mount, _load_parameter_into_model
-from transformers.generation import CompileConfig, GenerationConfig
-from transformers.utils.output_capturing import _CAN_RECORD_REGISTRY, OutputRecorder
-from transformers.utils.loading_report import LoadStateDictInfo, log_state_dict_report
+,get_torch_context_manager_or_global_device, _load_parameter_into_model
+from transformers.generation import GenerationConfig
+from transformers.utils.loading_report import LoadStateDictInfo
 from transformers import initialization as init
-from transformers.quantizers import HfQuantizer
-from torch.utils.checkpoint import checkpoint
 from functools import partial, wraps
-import inspect
-from huggingface_hub import is_offline_mode, split_torch_state_dict_into_shards
 from transformers.integrations.peft import maybe_load_adapters
-from transformers.integrations.accelerate import check_and_set_device_map, get_device
+from transformers.integrations.accelerate import check_and_set_device_map
 from transformers.quantizers.auto import get_hf_quantizer
 from transformers.monkey_patching import apply_patches, patch_output_recorders
-from transformers.integrations import PeftAdapterMixin, deepspeed_config, hub_kernels, is_deepspeed_zero3_enabled, is_fsdp_enabled
-from transformers.integrations.hub_kernels import allow_all_hub_kernels, is_kernel, kernelize
-from transformers.integrations.moe import ALL_EXPERTS_FUNCTIONS
-from transformers.integrations.finegrained_fp8 import ALL_FP8_EXPERTS_FUNCTIONS
+from transformers.integrations import PeftAdapterMixin
+from transformers.integrations.hub_kernels import allow_all_hub_kernels
 from transformers.conversion_mapping import get_model_conversion_mapping
-import sys, re
-from transformers.loss.loss_utils import LOSS_MAPPING
+import re
 from safetensors import safe_open
 from transformers.core_model_loading import convert_and_load_state_dict_in_model
 from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS
-from transformers.utils.quantization_config import QuantizationMethod
+from typing import Optional, TypeVar
 
 SpecificPreTrainedModelType = TypeVar("SpecificPreTrainedModelType", bound="PreTrainedModel")
-_is_ds_init_called = False
-ALL_ATTENTION_FUNCTIONS: AttentionInterface = AttentionInterface()
-
 class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToHubMixin, PeftAdapterMixin, DistributedMixin):
 
     # General model properties
