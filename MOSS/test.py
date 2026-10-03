@@ -508,26 +508,11 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
     def named_non_persistent_buffers(
         self, recurse: bool = True, remove_duplicate: bool = True
     ) -> Iterator[tuple[str, torch.Tensor]]:
-        """Similar to `named_buffers`, but only yield non-persistent ones. It is handy as it's not perfectly straightforward
-        to know if they are persistent or not"""
         for name, tensor in self.named_buffers(recurse=recurse, remove_duplicate=remove_duplicate):
-            # We have to grab the parent here, as the attribute `_non_persistent_buffers_set` is on the immediate
-            # parent only
             parent, buf_name = name.rsplit(".", 1) if "." in name else ("", name)
             parent = self.get_submodule(parent)
             if buf_name in parent._non_persistent_buffers_set:
                 yield name, tensor
-
-    def train(self, mode: bool = True):
-        changed_mode = self.training != mode
-        out = super().train(mode)
-        # Avoid recasting kernels if not necessary
-        if self.use_kernels and changed_mode:
-            self.set_use_kernels(True)
-        return out
-
-    def eval(self):
-        return self.train(False)
 
     @classmethod
     def is_remote_code(cls) -> bool:
