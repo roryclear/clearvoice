@@ -494,7 +494,7 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
             disable_mmap=disable_mmap,
         )
         loading_info = cls._load_pretrained_model(model, state_dict, checkpoint_files, load_config)
-        loading_info = cls._finalize_model_loading(model, load_config, loading_info)
+        loading_info = cls._finalize_model_loading(model, loading_info)
         model.eval()  # Set model in evaluation mode to deactivate Dropout modules by default
         model.set_use_kernels(use_kernels, kernel_config)
 
@@ -560,16 +560,9 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
         return loading_info
 
     @staticmethod
-    def _finalize_model_loading(
-        model, load_config: LoadStateDictConfig, loading_info: LoadStateDictInfo
-    ) -> LoadStateDictInfo:
+    def _finalize_model_loading(model, loading_info: LoadStateDictInfo) -> LoadStateDictInfo:
         model.mark_tied_weights_as_initialized(loading_info)
-        model._move_missing_keys_from_meta_to_device(
-            loading_info.missing_and_mismatched(),
-            load_config.device_map,
-            load_config.device_mesh,
-            load_config.hf_quantizer,
-        )
+        model._move_missing_keys_from_meta_to_device()
         model.initialize_weights()
         model.tie_weights(missing_keys=loading_info.missing_keys, recompute_mapping=False)
 
@@ -608,15 +601,9 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
     def is_backend_compatible(cls):
         return cls._supports_attention_backend
 
-    def _move_missing_keys_from_meta_to_device(
-        self,
-        missing_keys: list[str],
-        device_map: dict | None,
-        device_mesh: "DeviceMeshLike | None",
-        hf_quantizer: HfQuantizer | None,
-    ) -> None:
+    def _move_missing_keys_from_meta_to_device(self) -> None:
         for key, buffer in self.named_non_persistent_buffers():
-            buffer_device = get_device(device_map, key, valid_torch_device=True)
+            buffer_device = get_device(None, key, valid_torch_device=True)
             value = torch.empty_like(buffer, device=buffer_device)
             _load_parameter_into_model(self, key, value)
 
