@@ -208,38 +208,6 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
 
     def float(self, *args): return super().float(*args)
 
-    @classmethod
-    def get_init_context(
-        cls, dtype: torch.dtype, is_quantized: bool, _is_ds_init_called: bool, allow_all_kernels: bool | None
-    ):
-        # Need to instantiate with correct dtype
-        init_contexts = [local_torch_dtype(dtype, cls.__name__), init.no_tie_weights(), apply_patches()]
-        # Needed as we cannot forward the `allow_all_kernels` arg in the model's __init__
-        if allow_all_kernels:
-            init_contexts.append(allow_all_hub_kernels())
-        if is_deepspeed_zero3_enabled():
-            import deepspeed
-
-            # We cannot initialize the model on meta device with deepspeed when not quantized
-            if not is_quantized and not _is_ds_init_called:
-                logger.info("Detected DeepSpeed ZeRO-3: activating zero.init() for this model")
-                init_contexts.extend(
-                    [
-                        init.no_init_weights(),
-                        deepspeed.zero.Init(config_dict_or_path=deepspeed_config()),
-                        set_zero3_state(),
-                    ]
-                )
-            elif is_quantized:
-                init_contexts.extend([torch.device("meta"), set_quantized_state()])
-        else:
-            # meta_device_safe_creation_ops patches torch.linspace to default to CPU
-            # so that custom models calling .item() during __init__ (e.g. drop-path
-            # schedules) don't crash on meta tensors.
-            init_contexts.extend([torch.device("meta"), init.meta_device_safe_creation_ops()])
-
-        return init_contexts
-
     def _get_dtype_plan(self, dtype: torch.dtype) -> dict:
         """Create the dtype_plan describing modules/parameters that should use the `keep_in_fp32` flag."""
         dtype_plan = {}
@@ -446,7 +414,7 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
             with ContextManagers(allow_all_kernels_context):
                 register_kernel_replacements_and_fusions(cls, config, kernel_config)
 
-        model_init_context = cls.get_init_context(dtype, is_quantized, _is_ds_init_called, allow_all_kernels)
+        model_init_context = [local_torch_dtype(dtype, cls.__name__), init.no_tie_weights(), apply_patches(), torch.device("meta"), init.meta_device_safe_creation_ops()]
 
         config = copy.deepcopy(config)  # We do not want to modify the config inplace in from_pretrained.
         with ContextManagers(model_init_context):
@@ -570,6 +538,7 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
         model._adjust_missing_and_unexpected_keys(loading_info)
 
         return loading_info
+
 
     @property
     def use_kernels(self) -> bool: return getattr(self, "_use_kernels", False)
