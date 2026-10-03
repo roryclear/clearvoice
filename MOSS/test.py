@@ -274,18 +274,7 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
         kernel_config = kwargs.pop("kernel_config", None)
         key_mapping = kwargs.pop("key_mapping", None)
 
-        # Not used anymore -- remove them from the kwargs
-        for name in ["mirror", "_fast_init", "low_cpu_mem_usage", "from_tf", "from_flax", "offload_state_dict"]:
-            _ = kwargs.pop(name, None)
-
-        # For BC on torch_dtype argument
-        if torch_dtype is not None:
-            dtype = dtype if dtype is not None else torch_dtype
-        if dtype is None:
-            dtype = "auto"
-
-        if is_offline_mode() and not local_files_only:
-            local_files_only = True
+        dtype = "auto"
 
         # Resolve the revision once and for all: config, weights, generation config and adapters are then all loaded
         # from the exact same repository state, without any further call to the Hub to revalidate a mutable revision.
@@ -301,19 +290,6 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
             "subfolder": subfolder,
         }
 
-
-        has_standalone_tp_args = tp_plan is not None or tp_size is not None
-
-        if distributed_config is not None:
-            distributed_config, device_map, device_mesh = cls.prepare_distribute_model(
-                distributed_config, device_map=device_map
-            )
-
-
-        if adapter_kwargs is None:
-            adapter_kwargs = {}
-
-        adapter_repo_id = pretrained_model_name_or_path
         _adapter_model_path, pretrained_model_name_or_path, adapter_kwargs = maybe_load_adapters(
             pretrained_model_name_or_path,
             download_kwargs,
@@ -322,52 +298,22 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
         device_map = check_and_set_device_map(device_map)  # warn, error and fix the device map
 
         user_agent = {"file_type": "model", "framework": "pytorch", "from_auto_class": from_auto_class}
-        if from_pipeline is not None:
-            user_agent["using_pipeline"] = from_pipeline
 
-        # Load config if we don't provide a configuration
-        if not isinstance(config, PreTrainedConfig):
-            config_path = config if config is not None else pretrained_model_name_or_path
-            config_class = cls.config_class
-            if config_class is None:
-                raise ValueError(
-                    f"{cls.__name__} does not define `config_class`; pass an explicit config to `from_pretrained`."
-                )
-            config, model_kwargs = config_class.from_pretrained(
-                config_path,
-                return_unused_kwargs=True,
-                gguf_file=gguf_file,
-                _from_auto=from_auto_class,
-                _from_pipeline=from_pipeline,
-                **download_kwargs,
-                **kwargs,
-            )
-            if "gguf_file" in model_kwargs:
-                model_kwargs.pop("gguf_file")
-        else:
-            config = copy.deepcopy(config)
-            model_kwargs = kwargs
-
-        if distributed_config is not None:
-            config.distributed_config = distributed_config
-
-        # Because some composite configs call super().__init__ before instantiating the sub-configs, we need this call
-        # to correctly redispatch recursively if the kwarg is provided
-        if "attn_implementation" in kwargs:
-            config._attn_implementation = kwargs.pop("attn_implementation")
-
-        if "experts_implementation" in kwargs:
-            config._experts_implementation = kwargs.pop("experts_implementation")
-
+        config_path = config if config is not None else pretrained_model_name_or_path
+        config_class = cls.config_class
+        config, model_kwargs = config_class.from_pretrained(
+            config_path,
+            return_unused_kwargs=True,
+            gguf_file=gguf_file,
+            _from_auto=from_auto_class,
+            _from_pipeline=from_pipeline,
+            **download_kwargs,
+            **kwargs,
+        )
+        model_kwargs.pop("gguf_file")
         hf_quantizer, config, device_map = get_hf_quantizer(
             config, quantization_config, device_map, weights_only, user_agent, gguf_file=gguf_file
         )
-
-        if kernel_config is not None and not use_kernels:
-            logger.warning_once(
-                "A kernel_config was provided but use_kernels is False; setting use_kernels=True automatically. To suppress this warning, explicitly set use_kernels to True."
-            )
-            use_kernels = True
 
         checkpoint_files, sharded_metadata = _get_resolved_checkpoint_files(
             pretrained_model_name_or_path=pretrained_model_name_or_path,
@@ -381,22 +327,11 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
             tqdm_class=tqdm_class,
         )
 
-        is_quantized = hf_quantizer is not None
-
-        if gguf_file:
-            # Read before the dtype is settled: a GGUF's own float type is what `dtype="auto"` resolves to.
-            hf_quantizer.read_header(checkpoint_files[0])
-
         # Find the correct dtype based on current state
         config, dtype = _get_dtype(
             dtype, checkpoint_files, config, sharded_metadata, state_dict, weights_only, hf_quantizer
         )
-
         config.name_or_path = pretrained_model_name_or_path
-
-        # Overwrite `config.fusion_config` if it is provided.
-        if fusion_config is not None:
-            config.fusion_config = copy.deepcopy(fusion_config)
 
         # Register fusion patches
         fusion_config = getattr(config, "fusion_config", None)
