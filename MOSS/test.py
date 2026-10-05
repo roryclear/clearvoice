@@ -354,7 +354,6 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
         )
 
         #model.lm_head = nn.Linear(1024, 151396, bias=False)
-        
         return model
 
     @staticmethod
@@ -990,22 +989,37 @@ class MossTranscribeDiarizeForConditionalGeneration(PreTrainedModel, GenerationM
         audio_chunk_mapping: Optional[torch.LongTensor] = None,
         logits_to_keep: int | torch.Tensor = 0,
         **kwargs,
-    ):
-        outputs = self.model(
+    ):  
+
+        return_dict = True if return_dict is None else return_dict
+        if input_ids is None and inputs_embeds is None:
+            raise ValueError("You must specify one of input_ids or inputs_embeds.")
+        if input_ids is not None and inputs_embeds is not None:
+            raise ValueError("You must specify only one of input_ids or inputs_embeds.")
+
+        if inputs_embeds is None:
+            inputs_embeds = self.model.language_model.embed_tokens(input_ids)
+            #inputs_embeds = self.get_input_embeddings()(input_ids)
+        inputs_embeds = self.model.inject_audio_features(
             input_ids=input_ids,
-            attention_mask=attention_mask,
-            position_ids=position_ids,
-            past_key_values=past_key_values,
             inputs_embeds=inputs_embeds,
-            use_cache=use_cache,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=True,
             input_features=input_features,
             audio_feature_lengths=audio_feature_lengths,
             audio_chunk_mapping=audio_chunk_mapping,
-            **kwargs,
         )
+        if output_attentions is not None:
+            kwargs["output_attentions"] = output_attentions
+        if output_hidden_states is not None:
+            kwargs["output_hidden_states"] = output_hidden_states
+
+        outputs = self.model.language_model(
+            input_ids=None, attention_mask=attention_mask, position_ids=position_ids,
+            past_key_values=past_key_values, inputs_embeds=inputs_embeds,
+            use_cache=use_cache, **kwargs,
+        )
+        if not return_dict:
+            outputs = outputs.to_tuple()
+
 
         hidden_states = outputs.last_hidden_state
         logits = self.lm_head(hidden_states[:, slice(-logits_to_keep, None) , :])
@@ -1051,7 +1065,6 @@ class _BaseAutoModelClass:
         adapter_kwargs = None
 
         kwargs["adapter_kwargs"] = adapter_kwargs
-        
         return MossTranscribeDiarizeForConditionalGeneration.from_pretrained(pretrained_model_name_or_path, *model_args, config=None, **kwargs)
 
 from dataclasses import fields
