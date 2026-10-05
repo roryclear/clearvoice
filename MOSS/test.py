@@ -177,17 +177,7 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
             setattr(parent, name, source_param)
             if missing_keys is not None: missing_keys.discard(target_param_name)
 
-    def init_weights(self):
-        """
-        Initialize and tie the weights if needed. If using a custom `PreTrainedModel`, you need to implement any
-        initialization logic in `_init_weights`.
-        """
-        # If we are initializing on meta device, there is no point in trying to run inits
-        if get_torch_context_manager_or_global_device() != torch.device("meta"):
-            # Initialize weights
-            self.initialize_weights()
-        # Tie weights needs to be called here, but it can use the pre-computed `all_tied_weights_keys`
-        self.tie_weights(recompute_mapping=False)
+    def init_weights(self): self.tie_weights(recompute_mapping=False)
 
     @wraps(torch.nn.Module.to)
     def to(self, *args, **kwargs): return super().to(*args, **kwargs)
@@ -211,8 +201,6 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
             dtype_plan.update(dict.fromkeys(self._keep_in_fp32_modules_strict, torch.float32))
 
         return dtype_plan
-
-    def set_use_kernels(self, use_kernels, kernel_config: KernelConfig | None = None, mode: "Mode | None" = None): self._use_kernels = False
 
     @classmethod
     def from_pretrained(
@@ -387,7 +375,7 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
         loading_info = cls._load_pretrained_model(model, state_dict, checkpoint_files, load_config)
         loading_info = cls._finalize_model_loading(model, loading_info)
         model.eval()  # Set model in evaluation mode to deactivate Dropout modules by default
-        model.set_use_kernels(use_kernels, kernel_config)
+        model._use_kernels = False
 
 
         model.adjust_generation_fn(
@@ -416,8 +404,6 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
                 adapter_kwargs=adapter_kwargs,
             )
 
-        if output_loading_info:
-            return model, loading_info.to_dict()
         return model
 
     @staticmethod
@@ -461,10 +447,6 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
         model._adjust_missing_and_unexpected_keys(loading_info)
 
         return loading_info
-
-
-    @property
-    def use_kernels(self) -> bool: return getattr(self, "_use_kernels", False)
 
     def _move_missing_keys_from_meta_to_device(self) -> None:
         for key, buffer in self.named_non_persistent_buffers():
