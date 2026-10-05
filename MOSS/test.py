@@ -266,11 +266,6 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
             "subfolder": subfolder,
         }
 
-        _adapter_model_path, pretrained_model_name_or_path, adapter_kwargs = maybe_load_adapters(
-            pretrained_model_name_or_path,
-            download_kwargs,
-            **adapter_kwargs,
-        )
         device_map = check_and_set_device_map(device_map)  # warn, error and fix the device map
 
         user_agent = {"file_type": "model", "framework": "pytorch", "from_auto_class": from_auto_class}
@@ -309,21 +304,6 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
         )
         config.name_or_path = pretrained_model_name_or_path
 
-        # Register fusion patches
-        fusion_config = getattr(config, "fusion_config", None)
-        if fusion_config is not None:
-            from .fusion_mapping import register_fusion_patches
-
-            register_fusion_patches(cls, config, fusion_config)
-
-        # Kernel patches: single-layer replacement (stateful __init__) then fusions.
-        if kernel_config is not None and use_kernels:
-            from .integrations.hub_kernels import register_kernel_replacements_and_fusions
-
-            # For remote kernels, we need to apply the context manager
-            allow_all_kernels_context = [allow_all_hub_kernels()] if allow_all_kernels else []
-            with ContextManagers(allow_all_kernels_context):
-                register_kernel_replacements_and_fusions(cls, config, kernel_config)
 
         model_init_context = [local_torch_dtype(dtype, cls.__name__), init.no_tie_weights(), apply_patches(), torch.device("meta"), init.meta_device_safe_creation_ops()]
 
@@ -332,27 +312,12 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
             model = cls(config, *model_args, **model_kwargs)
             patch_output_recorders(model)
 
-            if hf_quantizer is not None:  # replace module with quantized modules (does not touch weights)
-                hf_quantizer.preprocess_model(
-                    model=model,
-                    dtype=dtype,
-                    device_map=device_map,
-                    checkpoint_files=checkpoint_files,
-                    use_kernels=use_kernels,
-                )
-
-        if gguf_file:
-            state_dict = hf_quantizer.get_state_dict(checkpoint_files[0], model)
-
         # Create the dtype_plan to potentially use the `keep_in_fp32` flags (this needs to be called on the already
         # instantiated model, as the flags can be modified by instances sometimes)
         dtype_plan = model._get_dtype_plan(dtype)
 
         # Obtain the weight conversion mapping for this model if any are registered and apply to all submodels recursively
         weight_conversions = get_model_conversion_mapping(model, key_mapping, hf_quantizer)
-
-        if distributed_config is not None:
-            model = cls.maybe_distribute_model(model, distributed_config, device_mesh)
 
         # Finalize model weight initialization
         load_config = LoadStateDictConfig(
@@ -388,22 +353,8 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
             **kwargs,
         )
 
-        if hf_quantizer is not None:
-            model.hf_quantizer = hf_quantizer
-            hf_quantizer.postprocess_model(
-                model
-            )  # usually a no-op but sometimes needed, e.g to remove the quant config when dequantizing
-
-        if _adapter_model_path is not None:
-            if token is not None:
-                adapter_kwargs["token"] = token
-            loading_info = model.load_adapter(
-                _adapter_model_path,
-                adapter_name=adapter_name,
-                load_config=load_config,
-                adapter_kwargs=adapter_kwargs,
-            )
-
+        #model.lm_head = nn.Linear(1024, 151396, bias=False)
+        
         return model
 
     @staticmethod
