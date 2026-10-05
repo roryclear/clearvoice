@@ -6,7 +6,6 @@ import copy
 from pathlib import Path
 
 from transformers.audio_utils import load_audio
-from typing import Optional, TypeVar, get_type_hints
 from dataclasses import dataclass
 from collections import OrderedDict
 import os
@@ -15,36 +14,25 @@ from transformers.configuration_utils import PreTrainedConfig
 from collections.abc import Iterator
 from torch import nn
 from transformers.modeling_utils import EmbeddingAccessMixin, ModuleUtilsMixin, PushToHubMixin, PeftAdapterMixin, DistributedMixin, KernelConfig, LoadStateDictConfig, _get_resolved_checkpoint_files, _get_dtype, local_torch_dtype, ContextManagers, AttentionInterface\
-,get_torch_context_manager_or_global_device, _is_on_hf_mount, _load_parameter_into_model
-from transformers.generation import CompileConfig, GenerationConfig
-from transformers.utils.output_capturing import _CAN_RECORD_REGISTRY, OutputRecorder
-from transformers.utils.loading_report import LoadStateDictInfo, log_state_dict_report
+,get_torch_context_manager_or_global_device, _load_parameter_into_model
+from transformers.generation import GenerationConfig
+from transformers.utils.loading_report import LoadStateDictInfo
 from transformers import initialization as init
-from transformers.quantizers import HfQuantizer
-from torch.utils.checkpoint import checkpoint
 from functools import partial, wraps
-import inspect
-from huggingface_hub import is_offline_mode, split_torch_state_dict_into_shards
 from transformers.integrations.peft import maybe_load_adapters
-from transformers.integrations.accelerate import check_and_set_device_map, get_device
+from transformers.integrations.accelerate import check_and_set_device_map
 from transformers.quantizers.auto import get_hf_quantizer
 from transformers.monkey_patching import apply_patches, patch_output_recorders
-from transformers.integrations import PeftAdapterMixin, deepspeed_config, hub_kernels, is_deepspeed_zero3_enabled, is_fsdp_enabled
-from transformers.integrations.hub_kernels import allow_all_hub_kernels, is_kernel, kernelize
-from transformers.integrations.moe import ALL_EXPERTS_FUNCTIONS
-from transformers.integrations.finegrained_fp8 import ALL_FP8_EXPERTS_FUNCTIONS
+from transformers.integrations import PeftAdapterMixin
+from transformers.integrations.hub_kernels import allow_all_hub_kernels
 from transformers.conversion_mapping import get_model_conversion_mapping
-import sys, re
-from transformers.loss.loss_utils import LOSS_MAPPING
+import re
 from safetensors import safe_open
 from transformers.core_model_loading import convert_and_load_state_dict_in_model
 from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS
-from transformers.utils.quantization_config import QuantizationMethod
+from typing import Optional, TypeVar
 
 SpecificPreTrainedModelType = TypeVar("SpecificPreTrainedModelType", bound="PreTrainedModel")
-_is_ds_init_called = False
-ALL_ATTENTION_FUNCTIONS: AttentionInterface = AttentionInterface()
-
 class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToHubMixin, PeftAdapterMixin, DistributedMixin):
 
     # General model properties
@@ -189,17 +177,7 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
             setattr(parent, name, source_param)
             if missing_keys is not None: missing_keys.discard(target_param_name)
 
-    def init_weights(self):
-        """
-        Initialize and tie the weights if needed. If using a custom `PreTrainedModel`, you need to implement any
-        initialization logic in `_init_weights`.
-        """
-        # If we are initializing on meta device, there is no point in trying to run inits
-        if get_torch_context_manager_or_global_device() != torch.device("meta"):
-            # Initialize weights
-            self.initialize_weights()
-        # Tie weights needs to be called here, but it can use the pre-computed `all_tied_weights_keys`
-        self.tie_weights(recompute_mapping=False)
+    def init_weights(self): self.tie_weights(recompute_mapping=False)
 
     @wraps(torch.nn.Module.to)
     def to(self, *args, **kwargs): return super().to(*args, **kwargs)
@@ -207,38 +185,6 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
     def half(self, *args): return super().half(*args)
 
     def float(self, *args): return super().float(*args)
-
-    @classmethod
-    def get_init_context(
-        cls, dtype: torch.dtype, is_quantized: bool, _is_ds_init_called: bool, allow_all_kernels: bool | None
-    ):
-        # Need to instantiate with correct dtype
-        init_contexts = [local_torch_dtype(dtype, cls.__name__), init.no_tie_weights(), apply_patches()]
-        # Needed as we cannot forward the `allow_all_kernels` arg in the model's __init__
-        if allow_all_kernels:
-            init_contexts.append(allow_all_hub_kernels())
-        if is_deepspeed_zero3_enabled():
-            import deepspeed
-
-            # We cannot initialize the model on meta device with deepspeed when not quantized
-            if not is_quantized and not _is_ds_init_called:
-                logger.info("Detected DeepSpeed ZeRO-3: activating zero.init() for this model")
-                init_contexts.extend(
-                    [
-                        init.no_init_weights(),
-                        deepspeed.zero.Init(config_dict_or_path=deepspeed_config()),
-                        set_zero3_state(),
-                    ]
-                )
-            elif is_quantized:
-                init_contexts.extend([torch.device("meta"), set_quantized_state()])
-        else:
-            # meta_device_safe_creation_ops patches torch.linspace to default to CPU
-            # so that custom models calling .item() during __init__ (e.g. drop-path
-            # schedules) don't crash on meta tensors.
-            init_contexts.extend([torch.device("meta"), init.meta_device_safe_creation_ops()])
-
-        return init_contexts
 
     def _get_dtype_plan(self, dtype: torch.dtype) -> dict:
         """Create the dtype_plan describing modules/parameters that should use the `keep_in_fp32` flag."""
@@ -255,8 +201,6 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
             dtype_plan.update(dict.fromkeys(self._keep_in_fp32_modules_strict, torch.float32))
 
         return dtype_plan
-
-    def set_use_kernels(self, use_kernels, kernel_config: KernelConfig | None = None, mode: "Mode | None" = None): self._use_kernels = False
 
     @classmethod
     def from_pretrained(
@@ -306,18 +250,7 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
         kernel_config = kwargs.pop("kernel_config", None)
         key_mapping = kwargs.pop("key_mapping", None)
 
-        # Not used anymore -- remove them from the kwargs
-        for name in ["mirror", "_fast_init", "low_cpu_mem_usage", "from_tf", "from_flax", "offload_state_dict"]:
-            _ = kwargs.pop(name, None)
-
-        # For BC on torch_dtype argument
-        if torch_dtype is not None:
-            dtype = dtype if dtype is not None else torch_dtype
-        if dtype is None:
-            dtype = "auto"
-
-        if is_offline_mode() and not local_files_only:
-            local_files_only = True
+        dtype = "auto"
 
         # Resolve the revision once and for all: config, weights, generation config and adapters are then all loaded
         # from the exact same repository state, without any further call to the Hub to revalidate a mutable revision.
@@ -333,19 +266,6 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
             "subfolder": subfolder,
         }
 
-
-        has_standalone_tp_args = tp_plan is not None or tp_size is not None
-
-        if distributed_config is not None:
-            distributed_config, device_map, device_mesh = cls.prepare_distribute_model(
-                distributed_config, device_map=device_map
-            )
-
-
-        if adapter_kwargs is None:
-            adapter_kwargs = {}
-
-        adapter_repo_id = pretrained_model_name_or_path
         _adapter_model_path, pretrained_model_name_or_path, adapter_kwargs = maybe_load_adapters(
             pretrained_model_name_or_path,
             download_kwargs,
@@ -354,52 +274,22 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
         device_map = check_and_set_device_map(device_map)  # warn, error and fix the device map
 
         user_agent = {"file_type": "model", "framework": "pytorch", "from_auto_class": from_auto_class}
-        if from_pipeline is not None:
-            user_agent["using_pipeline"] = from_pipeline
 
-        # Load config if we don't provide a configuration
-        if not isinstance(config, PreTrainedConfig):
-            config_path = config if config is not None else pretrained_model_name_or_path
-            config_class = cls.config_class
-            if config_class is None:
-                raise ValueError(
-                    f"{cls.__name__} does not define `config_class`; pass an explicit config to `from_pretrained`."
-                )
-            config, model_kwargs = config_class.from_pretrained(
-                config_path,
-                return_unused_kwargs=True,
-                gguf_file=gguf_file,
-                _from_auto=from_auto_class,
-                _from_pipeline=from_pipeline,
-                **download_kwargs,
-                **kwargs,
-            )
-            if "gguf_file" in model_kwargs:
-                model_kwargs.pop("gguf_file")
-        else:
-            config = copy.deepcopy(config)
-            model_kwargs = kwargs
-
-        if distributed_config is not None:
-            config.distributed_config = distributed_config
-
-        # Because some composite configs call super().__init__ before instantiating the sub-configs, we need this call
-        # to correctly redispatch recursively if the kwarg is provided
-        if "attn_implementation" in kwargs:
-            config._attn_implementation = kwargs.pop("attn_implementation")
-
-        if "experts_implementation" in kwargs:
-            config._experts_implementation = kwargs.pop("experts_implementation")
-
+        config_path = config if config is not None else pretrained_model_name_or_path
+        config_class = cls.config_class
+        config, model_kwargs = config_class.from_pretrained(
+            config_path,
+            return_unused_kwargs=True,
+            gguf_file=gguf_file,
+            _from_auto=from_auto_class,
+            _from_pipeline=from_pipeline,
+            **download_kwargs,
+            **kwargs,
+        )
+        model_kwargs.pop("gguf_file")
         hf_quantizer, config, device_map = get_hf_quantizer(
             config, quantization_config, device_map, weights_only, user_agent, gguf_file=gguf_file
         )
-
-        if kernel_config is not None and not use_kernels:
-            logger.warning_once(
-                "A kernel_config was provided but use_kernels is False; setting use_kernels=True automatically. To suppress this warning, explicitly set use_kernels to True."
-            )
-            use_kernels = True
 
         checkpoint_files, sharded_metadata = _get_resolved_checkpoint_files(
             pretrained_model_name_or_path=pretrained_model_name_or_path,
@@ -413,22 +303,11 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
             tqdm_class=tqdm_class,
         )
 
-        is_quantized = hf_quantizer is not None
-
-        if gguf_file:
-            # Read before the dtype is settled: a GGUF's own float type is what `dtype="auto"` resolves to.
-            hf_quantizer.read_header(checkpoint_files[0])
-
         # Find the correct dtype based on current state
         config, dtype = _get_dtype(
             dtype, checkpoint_files, config, sharded_metadata, state_dict, weights_only, hf_quantizer
         )
-
         config.name_or_path = pretrained_model_name_or_path
-
-        # Overwrite `config.fusion_config` if it is provided.
-        if fusion_config is not None:
-            config.fusion_config = copy.deepcopy(fusion_config)
 
         # Register fusion patches
         fusion_config = getattr(config, "fusion_config", None)
@@ -446,7 +325,7 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
             with ContextManagers(allow_all_kernels_context):
                 register_kernel_replacements_and_fusions(cls, config, kernel_config)
 
-        model_init_context = cls.get_init_context(dtype, is_quantized, _is_ds_init_called, allow_all_kernels)
+        model_init_context = [local_torch_dtype(dtype, cls.__name__), init.no_tie_weights(), apply_patches(), torch.device("meta"), init.meta_device_safe_creation_ops()]
 
         config = copy.deepcopy(config)  # We do not want to modify the config inplace in from_pretrained.
         with ContextManagers(model_init_context):
@@ -493,10 +372,10 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
             download_kwargs=download_kwargs,
             disable_mmap=disable_mmap,
         )
-        loading_info, disk_offload_index = cls._load_pretrained_model(model, state_dict, checkpoint_files, load_config)
-        loading_info = cls._finalize_model_loading(model, load_config, loading_info)
+        loading_info = cls._load_pretrained_model(model, state_dict, checkpoint_files, load_config)
+        loading_info = cls._finalize_model_loading(model, loading_info)
         model.eval()  # Set model in evaluation mode to deactivate Dropout modules by default
-        model.set_use_kernels(use_kernels, kernel_config)
+        model._use_kernels = False
 
 
         model.adjust_generation_fn(
@@ -525,8 +404,6 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
                 adapter_kwargs=adapter_kwargs,
             )
 
-        if output_loading_info:
-            return model, loading_info.to_dict()
         return model
 
     @staticmethod
@@ -537,54 +414,16 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
         load_config: LoadStateDictConfig,
         expected_keys: list[str] | None = None,
     ) -> tuple[LoadStateDictInfo, dict]:
-        """Perform the actual loading of some checkpoints into a `model`, by reading them from disk and dispatching them accordingly."""
-        hf_quantizer = load_config.hf_quantizer
-        is_quantized = load_config.is_quantized
-        is_hqq_or_quark = hf_quantizer is not None and hf_quantizer.quantization_config.quant_method in {
-            QuantizationMethod.HQQ,
-            QuantizationMethod.QUARK,
-        }
-
-        # Model's definition arriving here is final (TP hooks added, quantized layers replaces)
-        expected_keys = list(model.state_dict().keys()) if expected_keys is None else expected_keys
-
-        # This offload index if for params explicitly on the "disk" in the device_map
         disk_offload_index = None
-
         all_pointer = set()
-        if state_dict is not None:
-            merged_state_dict = state_dict
-        elif checkpoint_files is not None and checkpoint_files[0].endswith(".safetensors") and state_dict is None:
-            merged_state_dict = {}
-            for file in checkpoint_files:
-                if load_config.disable_mmap or _is_on_hf_mount(file):
-                    with open(file, "rb") as _fh:
-                        merged_state_dict.update(_safe_load_bytes(_fh.read()))
-                    continue
-                is_mps = load_config.device_map is not None and any(
-                    (d.type if isinstance(d, torch.device) else d) == "mps"
-                    for d in load_config.device_map.values()
-                )
-                # Use pread on MPS (mmap incompatible) and Windows (mmap reserves
-                # copy-on-write commit charge for the entire file, exhausting memory
-                # for large multi-shard checkpoints).
-                if is_mps:
-                    backend, device = "pread", "mps"
-                elif sys.platform == "win32":
-                    backend, device = "pread", "cpu"
-                else:
-                    backend, device = "mmap", "cpu"
-                file_pointer = safe_open(file, framework="pt", device=device, backend=backend)
-                all_pointer.add(file_pointer)
-                for k in file_pointer.keys():
-                    merged_state_dict[k] = file_pointer.get_slice(k)  # don't materialize yet
-        # Checkpoints are .bin
-        elif checkpoint_files is not None:
-            merged_state_dict = {}
-            for ckpt_file in checkpoint_files:
-                merged_state_dict.update(load_state_dict(ckpt_file, disable_mmap=load_config.disable_mmap))
-        else:
-            raise ValueError("Neither a state dict nor checkpoint files were found.")
+        merged_state_dict = {}
+        for file in checkpoint_files:
+            #backend, device = "pread", "mps"
+            backend, device = "mmap", "cpu"
+            file_pointer = safe_open(file, framework="pt", device=device, backend=backend)
+            all_pointer.add(file_pointer)
+            for k in file_pointer.keys():
+                merged_state_dict[k] = file_pointer.get_slice(k)  # don't materialize yet
 
         loading_info, disk_offload_index = convert_and_load_state_dict_in_model(
             model=model,
@@ -592,24 +431,15 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
             load_config=load_config,
             disk_offload_index=disk_offload_index,
         )
-
-        # finally close all opened file pointers
         for k in all_pointer:
             k.__exit__(None, None, None)
 
-        return loading_info, disk_offload_index
+        return loading_info
 
     @staticmethod
-    def _finalize_model_loading(
-        model, load_config: LoadStateDictConfig, loading_info: LoadStateDictInfo
-    ) -> LoadStateDictInfo:
+    def _finalize_model_loading(model, loading_info: LoadStateDictInfo) -> LoadStateDictInfo:
         model.mark_tied_weights_as_initialized(loading_info)
-        model._move_missing_keys_from_meta_to_device(
-            loading_info.missing_and_mismatched(),
-            load_config.device_map,
-            load_config.device_mesh,
-            load_config.hf_quantizer,
-        )
+        model._move_missing_keys_from_meta_to_device()
         model.initialize_weights()
         model.tie_weights(missing_keys=loading_info.missing_keys, recompute_mapping=False)
 
@@ -618,245 +448,24 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
 
         return loading_info
 
-    def retrieve_modules_from_names(self, names, add_prefix=False, remove_prefix=False):
-        module_keys = {".".join(key.split(".")[:-1]) for key in names}
-
-        # torch.nn.ParameterList is a special case where two parameter keywords
-        # are appended to the module name, *e.g.* bert.special_embeddings.0
-        module_keys = module_keys.union(
-            {".".join(key.split(".")[:-2]) for key in names if len(key) > 0 and key[-1].isdigit()}
-        )
-
-        retrieved_modules = []
-        # retrieve all modules that has at least one missing weight name
-        for name, module in self.named_modules():
-            if remove_prefix:
-                _prefix = f"{self.base_model_prefix}."
-                name = name.removeprefix(_prefix)
-            elif add_prefix:
-                name = ".".join([self.base_model_prefix, name]) if len(name) > 0 else self.base_model_prefix
-
-            if name in module_keys:
-                retrieved_modules.append(module)
-
-        return retrieved_modules
-
-    @classmethod
-    def register_for_auto_class(cls, auto_class="AutoModel"):
-        """
-        Register this class with a given auto class. This should only be used for custom models as the ones in the
-        library are already mapped with an auto class.
-
-
-
-        Args:
-            auto_class (`str` or `type`, *optional*, defaults to `"AutoModel"`):
-                The auto class to register this new model with.
-        """
-        if not isinstance(auto_class, str):
-            auto_class = auto_class.__name__
-
-        import transformers.models.auto as auto_module
-
-        if not hasattr(auto_module, auto_class):
-            raise ValueError(f"{auto_class} is not a valid auto class.")
-
-        cls._auto_class = auto_class
-
-    def warn_if_padding_and_no_attention_mask(self, input_ids, attention_mask):
-        """
-        Shows a one-time warning if the input_ids appear to contain padding and no attention mask was given.
-        """
-
-        # Skip the check during tracing.
-        if is_tracing(input_ids):
-            return
-
-        if (attention_mask is not None) or (self.config.pad_token_id is None):
-            return
-
-        # Check only the first and last input IDs to reduce overhead.
-        if self.config.pad_token_id in input_ids[:, [-1, 0]]:
-            warn_string = (
-                "We strongly recommend passing in an `attention_mask` since your input_ids may be padded. See "
-                "https://huggingface.co/docs/transformers/troubleshooting"
-                "#incorrect-output-when-padding-tokens-arent-masked."
-            )
-
-            # If the pad token is equal to either BOS, EOS, or SEP, we do not know whether the user should use an
-            # attention_mask or not. In this case, we should still show a warning because this is a rare case.
-            # NOTE: `sep_token_id` is not used in all models and it can be absent in the config
-            sep_token_id = getattr(self.config, "sep_token_id", None)
-            if (
-                (self.config.bos_token_id is not None and self.config.bos_token_id == self.config.pad_token_id)
-                or (self.config.eos_token_id is not None and self.config.eos_token_id == self.config.pad_token_id)
-                or (sep_token_id is not None and sep_token_id == self.config.pad_token_id)
-            ):
-                warn_string += (
-                    f"\nYou may ignore this warning if your `pad_token_id` ({self.config.pad_token_id}) is identical "
-                    f"to the `bos_token_id` ({self.config.bos_token_id}), `eos_token_id` ({self.config.eos_token_id}), "
-                    f"or the `sep_token_id` ({sep_token_id}), and your input is not padded."
-                )
-
-            logger.warning_once(warn_string)
-
-    @property
-    def use_kernels(self) -> bool:
-        return getattr(self, "_use_kernels", False)
-
-    @use_kernels.setter
-    def use_kernels(self, value: bool) -> None:
-        # Avoid re-kernelizing if already enabled
-        if bool(value) and getattr(self, "_use_kernels", False):
-            return
-
-        if value:
-            self.set_use_kernels(True)
-        else:
-            if getattr(self, "_use_kernels", False):
-                logger.warning_once(
-                    "Disabling kernels at runtime is a no-op as there is no 'unkernelize' routine; keeping current kernels active."
-                )
-            self._use_kernels = False
-
-    def _default_compile_config(self) -> CompileConfig:
-        """Build the default `CompileConfig` for `get_compiled_call`.
-
-        Inductor + `reduce-overhead` (the `CompileConfig` defaults) target CUDA.
-        torch_tpu registers its own TorchDynamo backend named `"tpu"`; route
-        `device.type == "tpu"` through it with static shapes to match the
-        common StaticCache + fixed-prefill usage."""
-        if self.device.type == "tpu":
-            return CompileConfig(backend="tpu", dynamic=False, mode="default")
-        return CompileConfig()
-
-    def get_compiled_call(self, compile_config: CompileConfig | None) -> Callable:
-        """Return a `torch.compile`'d version of `self.__call__`. This is useful to dynamically choose between
-        non-compiled/compiled `forward` during inference, especially to switch between prefill (where we don't
-        want to use compiled version to avoid recomputing the graph with new shapes) and iterative decoding
-        (where we want the speed-ups of compiled version with static shapes)."""
-        # Only reset it if not present or different from previous config
-        if "llama4" in self.config.model_type:  # TODO try to enable for FULL COMPILE HYBRID CACHE SUPPORT
-            return self.__call__
-        compile_config = compile_config or self._default_compile_config()
-        default_config = getattr(self.generation_config, "compile_config", None) or self._default_compile_config()
-        if (
-            not hasattr(self, "_compiled_call")
-            or getattr(self, "_last_compile_config", default_config) != compile_config
-        ):
-            self._last_compile_config = compile_config
-            self._compiled_call = torch.compile(self.__call__, **compile_config.to_dict())
-        return self._compiled_call
-
-    @classmethod
-    def is_backend_compatible(cls):
-        return cls._supports_attention_backend
-
-    def _move_missing_keys_from_meta_to_device(
-        self,
-        missing_keys: list[str],
-        device_map: dict | None,
-        device_mesh: "DeviceMeshLike | None",
-        hf_quantizer: HfQuantizer | None,
-    ) -> None:
-        """Move missing params/buffers off meta to their target device.
-
-        Loaded weights are handled earlier in `convert_and_load_state_dict_in_model`
-        via `DtensorShardOperation` and `set_param_for_module`. This only
-        materializes keys that were not loaded (or mismatched) so
-        `_initialize_missing_keys` can run proper init on them.
-        """
-        is_quantized = hf_quantizer is not None
-        # This is the only case where we do not initialize the model on meta device, so we don't have to do anything here
-        if is_deepspeed_zero3_enabled() and not is_quantized:
-            return
-
-        # In this case we need to move everything back
-        if is_fsdp_enabled() and not is_local_dist_rank_0() and not is_quantized:
-            for key, param in self.named_parameters():
-                value = torch.zeros_like(param, device="cpu")
-                _load_parameter_into_model(self, key, value)
-            for key, buffer in self.named_buffers():
-                value = torch.zeros_like(buffer, device="cpu")
-                _load_parameter_into_model(self, key, value)
-            return
-
-        # The tied weight keys are in the "missing" usually, but they should not be moved (they will be tied anyway)
-        # This is especially important because if they are moved, they will lose the `_is_hf_initialized` flag, and they
-        # will be re-initialized for nothing (which can be quite long)
-        for key in missing_keys - self.all_tied_weights_keys.keys():
-            param = self.get_parameter_or_buffer(key)
-            param_device = get_device(device_map, key, valid_torch_device=True)
-            value = torch.empty_like(param, device=param_device)
-            # For TP, we may need to shard the param
-            if is_dtensor(param):
-                local = torch.empty(param._local_tensor.shape, dtype=param.dtype, device=param_device)
-                value = torch.nn.Parameter(
-                    _dtensor_from_local_like(local, param),
-                    requires_grad=param.requires_grad,
-                )
-            _load_parameter_into_model(self, key, value)
-        # We need to move back non-persistent buffers as well, as they are not part of loaded weights anyway
+    def _move_missing_keys_from_meta_to_device(self) -> None:
         for key, buffer in self.named_non_persistent_buffers():
-            buffer_device = get_device(device_map, key, valid_torch_device=True)
-            value = torch.empty_like(buffer, device=buffer_device)
+            value = torch.empty_like(buffer, device="cpu")
             _load_parameter_into_model(self, key, value)
 
     def _adjust_missing_and_unexpected_keys(self, loading_info: LoadStateDictInfo) -> None:
-        """Adjust the `missing_keys` and `unexpected_keys` based on current model's exception rules, to avoid
-        raising unneeded warnings/errors. This is performed in-place.
-        """
-        # Old checkpoints may have keys for rotary_emb.inv_freq for each layer, however we moved this buffer to the main model
-        # (so the buffer name has changed). Remove them in such a case. This is another exception that was not added to
-        # `_keys_to_ignore_on_load_unexpected` as it touches many models -> we add it manually to the existing patterns
         has_inv_freq_buffers = any(buffer.endswith("rotary_emb.inv_freq") for buffer, _ in self.named_buffers())
         additional_unexpected_patterns = {r"rotary_emb\.inv_freq"} if has_inv_freq_buffers else set()
-        # Same idea for `position_ids`: used to be a persistent buffer, now `persistent=False` in most models.
-        has_position_ids_buffers = any(buffer.endswith("position_ids") for buffer, _ in self.named_buffers())
-        if has_position_ids_buffers:
-            additional_unexpected_patterns.add(r"(^|\.)position_ids$")
-
-        missing_patterns = self._keys_to_ignore_on_load_missing or set()
         unexpected_patterns = (self._keys_to_ignore_on_load_unexpected or set()) | additional_unexpected_patterns
-        ignore_missing_regex, ignore_unexpected_regex = None, None
-        if len(missing_patterns) > 0:
-            ignore_missing_regex = re.compile("|".join(rf"({pattern})" for pattern in missing_patterns))
-        if len(unexpected_patterns) > 0:
-            ignore_unexpected_regex = re.compile("|".join(rf"({pattern})" for pattern in unexpected_patterns))
-
-        # Clean-up missing keys
-        if ignore_missing_regex is not None:
-            loading_info.missing_keys = {
-                key for key in loading_info.missing_keys if ignore_missing_regex.search(key) is None
-            }
-
-        # Clean-up unexpected keys
-        if ignore_unexpected_regex is not None:
-            loading_info.unexpected_keys = {
-                key for key in loading_info.unexpected_keys if ignore_unexpected_regex.search(key) is None
-            }
+        ignore_unexpected_regex = re.compile("|".join(rf"({pattern})" for pattern in unexpected_patterns))
+        loading_info.unexpected_keys = { key for key in loading_info.unexpected_keys if ignore_unexpected_regex.search(key) is None }
 
     def mark_tied_weights_as_initialized(self, loading_info):
-        """Adds the `_is_hf_initialized` flag on parameters that will be tied, in order to avoid initializing them
-        later as they will be tied (overwritten) anyway.
-        This is very important as most embeddings are tied, and they are huge params (vocabularies are often 256k), so
-        running inits on them is very costly."""
         for tied_param in getattr(self, "all_tied_weights_keys", {}).keys():
             param = self.get_parameter(tied_param)
             setattr(param, "_is_hf_initialized", True)
 
-        # Some custom code models define module tying (not parameter tying) in their __init__. When modules themselves are shared,
-        # weights inside both modules appear in the `state_dict` but only one will appear in the safetensors checkpoints
-        # as they are inherently tied because the 2 modules are the same object. In this case, once we load a parameter
-        # inside one of the 2 modules, the other will also automatically be loaded and will have the `_is_hf_initialized`
-        # flag (because we call `setattr` with the loaded param on the module, which is the same object), but its counterpart
-        # will still appear as a missing key as we never get it out of the set (because it appears in the state_dict as well).
-        # So we remove it now - otherwise it's considered missing and will be wrongly reinitialized
-        # Note: this is never an issue in main Transformers, as we never do module-tying, only parameter-tying, and we know
-        # which params are supposed to be tied to which other params
         if self.is_custom_code():
-            # Remove those that are already initialized, but appear as missing due to module tying (only if they are not known
-            # tied weights, i.e. we did not explicitly mark them as initialized just above)
             loading_info.missing_keys = {
                 key
                 for key in loading_info.missing_keys
@@ -864,53 +473,16 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
                 or not getattr(self.get_parameter_or_buffer(key), "_is_hf_initialized", False)
             }
 
-    def get_parameter_or_buffer(self, target: str):
-        """
-        Return the parameter or buffer given by `target` if it exists, otherwise throw an error. This combines
-        `get_parameter()` and `get_buffer()` in a single handy function. If the target is an `_extra_state` attribute,
-        it will return the extra state provided by the module. Note that it only work if `target` is a leaf of the model.
-        """
-        try:
-            return self.get_parameter(target)
-        except AttributeError:
-            pass
-        try:
-            return self.get_buffer(target)
-        except AttributeError:
-            pass
-        module, param_name = get_module_from_name(self, target)
-        if (
-            param_name == "_extra_state"
-            and getattr(module.__class__, "get_extra_state", torch.nn.Module.get_extra_state)
-            is not torch.nn.Module.get_extra_state
-        ):
-            return module.get_extra_state()
-
-        raise AttributeError(f"`{target}` is neither a parameter, buffer, nor extra state.")
+    def get_parameter_or_buffer(self, target: str): return self.get_parameter(target)
 
     def named_non_persistent_buffers(
         self, recurse: bool = True, remove_duplicate: bool = True
     ) -> Iterator[tuple[str, torch.Tensor]]:
-        """Similar to `named_buffers`, but only yield non-persistent ones. It is handy as it's not perfectly straightforward
-        to know if they are persistent or not"""
         for name, tensor in self.named_buffers(recurse=recurse, remove_duplicate=remove_duplicate):
-            # We have to grab the parent here, as the attribute `_non_persistent_buffers_set` is on the immediate
-            # parent only
             parent, buf_name = name.rsplit(".", 1) if "." in name else ("", name)
             parent = self.get_submodule(parent)
             if buf_name in parent._non_persistent_buffers_set:
                 yield name, tensor
-
-    def train(self, mode: bool = True):
-        changed_mode = self.training != mode
-        out = super().train(mode)
-        # Avoid recasting kernels if not necessary
-        if self.use_kernels and changed_mode:
-            self.set_use_kernels(True)
-        return out
-
-    def eval(self):
-        return self.train(False)
 
     @classmethod
     def is_remote_code(cls) -> bool:
@@ -928,14 +500,6 @@ _LazyAutoMappingValue = tuple[type[Any] | None, type[Any] | None]
 _T = TypeVar("_T")
 
 class _LazyAutoMapping(OrderedDict[Any, _LazyAutoMappingValue]):
-    """
-    A mapping config to object (model or tokenizer for instance) that will load keys and values when it is accessed.
-
-    Args:
-        - config_mapping: The map model type to config class
-        - model_mapping: The map model type to model (or tokenizer) class
-    """
-
     def __init__(self, config_mapping, model_mapping) -> None:
         self._config_mapping = config_mapping
         self._reverse_config_mapping = {v: k for k, v in config_mapping.items()}
@@ -963,12 +527,6 @@ class _LazyAutoMapping(OrderedDict[Any, _LazyAutoMappingValue]):
                 model_name = self._model_mapping[mtype]
                 return self._load_attr_from_module(mtype, model_name)
         raise KeyError(key)
-
-    def _load_attr_from_module(self, model_type, attr):
-        module_name = model_type_to_module_name(model_type)
-        if module_name not in self._modules:
-            self._modules[module_name] = importlib.import_module(f".{module_name}", "transformers.models")
-        return getattribute_from_module(self._modules[module_name], attr)
 
     def keys(self):
         mapping_keys = [
@@ -1008,35 +566,6 @@ class _LazyAutoMapping(OrderedDict[Any, _LazyAutoMappingValue]):
 
     def __iter__(self):
         return iter(self.keys())
-
-    def __contains__(self, item: type) -> bool:
-        if item in self._extra_content:
-            return True
-        if not hasattr(item, "__name__") or item.__name__ not in self._reverse_config_mapping:
-            return False
-        model_type = self._reverse_config_mapping[item.__name__]
-        return model_type in self._model_mapping
-
-    def register(self, key: Any | str, value: _LazyAutoMappingValue, exist_ok=False) -> None:
-        """
-        Register a new model in this mapping.
-        """
-        if hasattr(key, "__name__") and key.__name__ in self._reverse_config_mapping:
-            model_type = self._reverse_config_mapping[key.__name__]
-            if model_type in self._model_mapping and not exist_ok:
-                raise ValueError(f"'{key}' is already used by a Transformers model.")
-
-        # Some remote code may simply register a new custom model/processor/..., while using a native Transformers config. In such
-        # cases, we should skip registering, as we will otherwise always remap the native config to the custom model/processor/... in
-        # the same session, even if `trust_remote_code=False` is specified by the user (in which case we should use the native
-        # Transformers model/processor/... corresponding to the config)
-        # This is because remote/native is indistinguisable from the config class only in such cases, as they both use the same class - then
-        # `from_pretrained`/`from_config` are responsible to grab the correct class depending on whether `trust_remote_code` is True/False
-        if getattr(key, "__module__", "").startswith("transformers."):
-            return
-
-        # Register the new mapping (this will always take precedence in __getattr__ and __contains__ compared to base mapping)
-        self._extra_content[key] = value
 
     def __reduce__(self):
         return (
@@ -1271,14 +800,6 @@ from transformers.modeling_outputs import BaseModelOutput
 import math
 
 class WhisperEncoder(WhisperPreTrainedModel):
-    """
-    Transformer encoder consisting of *config.encoder_layers* self attention layers. Each layer is a
-    [`WhisperEncoderLayer`].
-
-    Args:
-        config: WhisperConfig
-    """
-
     _can_record_outputs = {
         "hidden_states": WhisperEncoderLayer,
         "attentions": WhisperAttention,
@@ -1306,7 +827,6 @@ class WhisperEncoder(WhisperPreTrainedModel):
         self.layer_norm = nn.LayerNorm(config.d_model)
 
         self.gradient_checkpointing = False
-        # Initialize weights and apply final processing
         self.post_init()
 
     def _freeze_parameters(self):
@@ -1328,12 +848,6 @@ class WhisperEncoder(WhisperPreTrainedModel):
         attention_mask=None,
         **kwargs: Unpack[TransformersKwargs],
     ) -> BaseModelOutput:
-        expected_seq_length = self.config.max_source_positions * self.conv1.stride[0] * self.conv2.stride[0]
-        if input_features.shape[-1] != expected_seq_length:
-            raise ValueError(
-                f"Whisper expects the mel input features to be of length {expected_seq_length}, but found {input_features.shape[-1]}. Make sure to pad the input mel features to {expected_seq_length}."
-            )
-
         inputs_embeds = nn.functional.gelu(self.conv1(input_features))
         inputs_embeds = nn.functional.gelu(self.conv2(inputs_embeds))
 
@@ -1343,26 +857,9 @@ class WhisperEncoder(WhisperPreTrainedModel):
         hidden_states = inputs_embeds + self.embed_positions(all_positions)
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
 
-        for idx, encoder_layer in enumerate(self.layers):
-            # add LayerDrop (see https://huggingface.co/papers/1909.11556 for description)
-            to_drop = False
-            if self.training:
-                dropout_probability = torch.rand([])
-                if dropout_probability < self.layerdrop:  # skip the layer
-                    to_drop = True
-
-            if not to_drop:
-                hidden_states = encoder_layer(
-                    hidden_states,
-                    None,
-                    **kwargs,
-                )
-
+        for _, encoder_layer in enumerate(self.layers): hidden_states = encoder_layer(hidden_states, None, **kwargs,)
         hidden_states = self.layer_norm(hidden_states)
-
-        return BaseModelOutput(
-            last_hidden_state=hidden_states,
-        )
+        return BaseModelOutput(last_hidden_state=hidden_states,)
 
 
 class VQAdaptor(nn.Module):
@@ -1560,8 +1057,7 @@ class MossTranscribeDiarizeForConditionalGeneration(PreTrainedModel, GenerationM
         )
 
         hidden_states = outputs.last_hidden_state
-        slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
-        logits = self.lm_head(hidden_states[:, slice_indices, :])
+        logits = self.lm_head(hidden_states[:, slice(-logits_to_keep, None) , :])
         return CausalLMOutputWithPast(
             loss=None, logits=logits,
             past_key_values=outputs.past_key_values,
@@ -1610,98 +1106,19 @@ class _BaseAutoModelClass:
 from dataclasses import fields
 
 class ModelOutput(OrderedDict):
-    """
-    Base class for all model outputs as dataclass. Has a `__getitem__` that allows indexing by integer or slice (like a
-    tuple) or strings (like a dictionary) that will ignore the `None` attributes. Otherwise behaves like a regular
-    python dictionary.
-
-    <Tip warning={true}>
-
-    You can't unpack a `ModelOutput` directly. Use the [`~utils.ModelOutput.to_tuple`] method to convert it to a tuple
-    before.
-
-    </Tip>
-    """
-
-    def __init_subclass__(cls) -> None:
-        """Register subclasses as pytree nodes.
-
-        This is necessary to synchronize gradients when using `torch.nn.parallel.DistributedDataParallel` with
-        `static_graph=True` with modules that output `ModelOutput` subclasses.
-        """
-        _register_model_output_pytree_node(cls)
+    def __init_subclass__(cls) -> None: pass
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         _register_model_output_pytree_node(type(self))
 
-        # Subclasses of ModelOutput must use the @dataclass decorator
-        # This check is done in __init__ because the @dataclass decorator operates after __init_subclass__
-        # issubclass() would return True for issubclass(ModelOutput, ModelOutput) when False is needed
-        # Just need to check that the current class is not ModelOutput
-        is_modeloutput_subclass = self.__class__ != ModelOutput
-
-        if is_modeloutput_subclass and not is_dataclass(self):
-            raise TypeError(
-                f"{self.__module__}.{self.__class__.__name__} is not a dataclass."
-                " This is a subclass of ModelOutput and so must use the @dataclass decorator."
-            )
-
     def __post_init__(self):
-        """Check the ModelOutput dataclass.
-
-        Only occurs if @dataclass decorator has been used.
-        """
         _register_model_output_pytree_node(type(self))
         class_fields = fields(self)
-
-        # Safety and consistency checks
-        if not len(class_fields):
-            raise ValueError(f"{self.__class__.__name__} has no fields.")
-        if not all(field.default is None for field in class_fields[1:]):
-            raise ValueError(f"{self.__class__.__name__} should not have more than one required field.")
-
-        first_field = getattr(self, class_fields[0].name)
-        other_fields_are_none = all(self.__dict__.get(field.name) is None for field in class_fields[1:])
-
-        if other_fields_are_none and not is_tensor(first_field):
-            if isinstance(first_field, dict):
-                iterator = first_field.items()
-                first_field_iterator = True
-            else:
-                try:
-                    iterator = iter(first_field)
-                    first_field_iterator = True
-                except TypeError:
-                    first_field_iterator = False
-
-            # if we provided an iterator as first field and the iterator is a (key, value) iterator
-            # set the associated fields
-            if first_field_iterator:
-                # reset first field to None and remove it from the internal dictionary
-                setattr(self, class_fields[0].name, None)
-                super().__delitem__(class_fields[0].name)
-                for idx, element in enumerate(iterator):
-                    if not isinstance(element, (list, tuple)) or len(element) != 2 or not isinstance(element[0], str):
-                        if idx == 0:
-                            # If we do not have an iterator of key/values, set it as attribute
-                            self[class_fields[0].name] = first_field
-                        else:
-                            # If we have a mixed iterator, raise an error
-                            raise ValueError(
-                                f"Cannot set key/value for {element}. It needs to be a tuple (key, value)."
-                            )
-                        break
-                    setattr(self, element[0], element[1])
-                    if element[1] is not None:
-                        self[element[0]] = element[1]
-            elif first_field is not None:
-                self[class_fields[0].name] = first_field
-        else:
-            for field in class_fields:
-                v = self.__dict__.get(field.name)
-                if v is not None:
-                    self[field.name] = v
+        for field in class_fields:
+            v = self.__dict__.get(field.name)
+            if v is not None:
+                self[field.name] = v
 
     def __delitem__(self, *args, **kwargs):
         raise Exception(f"You cannot use ``__delitem__`` on a {self.__class__.__name__} instance.")
