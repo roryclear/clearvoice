@@ -1071,25 +1071,10 @@ class ModelOutput(OrderedDict):
             v = self.__dict__.get(field.name)
             if v is not None:
                 self[field.name] = v
-
-    def __delitem__(self, *args, **kwargs):
-        raise Exception(f"You cannot use ``__delitem__`` on a {self.__class__.__name__} instance.")
-
-    def setdefault(self, *args, **kwargs):
-        raise Exception(f"You cannot use ``setdefault`` on a {self.__class__.__name__} instance.")
-
-    def pop(self, *args, **kwargs):
-        raise Exception(f"You cannot use ``pop`` on a {self.__class__.__name__} instance.")
-
-    def update(self, *args, **kwargs):
-        raise Exception(f"You cannot use ``update`` on a {self.__class__.__name__} instance.")
-
+                
     def __getitem__(self, k):
-        if isinstance(k, str):
-            inner_dict = dict(self.items())
-            return inner_dict[k]
-        else:
-            return self.to_tuple()[k]
+        inner_dict = dict(self.items())
+        return inner_dict[k]
 
     def __setattr__(self, name, value):
         field_names = {field.name for field in fields(self)}
