@@ -1064,13 +1064,7 @@ class ModelOutput(OrderedDict):
         super().__init__(*args, **kwargs)
         _register_model_output_pytree_node(type(self))
 
-    def __post_init__(self):
-        _register_model_output_pytree_node(type(self))
-        class_fields = fields(self)
-        for field in class_fields:
-            v = self.__dict__.get(field.name)
-            if v is not None:
-                self[field.name] = v
+    def __post_init__(self): pass
                 
     def __getitem__(self, k):
         inner_dict = dict(self.items())
@@ -1089,54 +1083,11 @@ class ModelOutput(OrderedDict):
         # Don't call self.__setattr__ to avoid recursion errors
         super().__setattr__(key, value)
 
-    def __reduce__(self):
-        if not is_dataclass(self):
-            return super().__reduce__()
-        callable, _args, *remaining = super().__reduce__()
-        args = tuple(getattr(self, field.name) for field in fields(self))
-        return callable, args, *remaining
+    def to_tuple(self) -> tuple: return tuple(self[k] for k in self.keys())
 
-    def to_tuple(self) -> tuple:
-        """
-        Convert self to a tuple containing all the attributes/keys that are not `None`.
-        """
-        return tuple(self[k] for k in self.keys())
+from collections.abc import Callable
 
-_registered_model_output_types: set[type[Any]] = set()
-def _model_output_flatten(output: ModelOutput) -> tuple[list[Any], list[str]]:
-    return list(output.values()), list(output.keys())
-from functools import partial
-from collections.abc import Callable, Iterable
-
-def _model_output_unflatten(
-    values: Iterable[Any],
-    context: list[str],
-    output_type: type[ModelOutput] | None = None,
-) -> ModelOutput:
-    return output_type(**dict(zip(context, values)))
-
-
-def _register_model_output_pytree_node(output_type: type[ModelOutput]) -> None:
-    import torch
-
-    # AMD CI runs PyTorch 2.8.0+rocm which does not support tracing `set.__contains__`
-    # through TorchDynamo. Skip registration during compilation since the pytree node
-    # is already registered from the preceding eager run.
-    if torch.compiler.is_compiling():
-        return
-    if output_type in _registered_model_output_types:
-        return
-
-    import torch.utils._pytree as torch_pytree
-
-    torch_pytree.register_pytree_node(
-        output_type,
-        _model_output_flatten,
-        partial(_model_output_unflatten, output_type=output_type),
-        serialized_type_name=f"{output_type.__module__}.{output_type.__name__}",
-        flatten_with_keys_fn=torch_pytree._dict_flatten_with_keys,
-    )
-    _registered_model_output_types.add(output_type)
+def _register_model_output_pytree_node(output_type: type[ModelOutput]) -> None: pass
 
 @dataclass
 class CausalLMOutputWithPast(ModelOutput):
