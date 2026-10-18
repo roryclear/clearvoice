@@ -990,16 +990,7 @@ class MossTranscribeDiarizeForConditionalGeneration(PreTrainedModel, GenerationM
         logits_to_keep: int | torch.Tensor = 0,
         **kwargs,
     ):  
-
-        return_dict = True if return_dict is None else return_dict
-        if input_ids is None and inputs_embeds is None:
-            raise ValueError("You must specify one of input_ids or inputs_embeds.")
-        if input_ids is not None and inputs_embeds is not None:
-            raise ValueError("You must specify only one of input_ids or inputs_embeds.")
-
-        if inputs_embeds is None:
-            inputs_embeds = self.model.language_model.embed_tokens(input_ids)
-            #inputs_embeds = self.get_input_embeddings()(input_ids)
+        inputs_embeds = self.model.language_model.embed_tokens(input_ids)
         inputs_embeds = self.model.inject_audio_features(
             input_ids=input_ids,
             inputs_embeds=inputs_embeds,
@@ -1017,9 +1008,6 @@ class MossTranscribeDiarizeForConditionalGeneration(PreTrainedModel, GenerationM
             past_key_values=past_key_values, inputs_embeds=inputs_embeds,
             use_cache=use_cache, **kwargs,
         )
-        if not return_dict:
-            outputs = outputs.to_tuple()
-
 
         hidden_states = outputs.last_hidden_state
         logits = self.lm_head(hidden_states[:, slice(-logits_to_keep, None) , :])
