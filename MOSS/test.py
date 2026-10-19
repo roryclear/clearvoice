@@ -13,18 +13,15 @@ from transformers import GenerationMixin
 from transformers.configuration_utils import PreTrainedConfig
 from collections.abc import Iterator
 from torch import nn
-from transformers.modeling_utils import EmbeddingAccessMixin, ModuleUtilsMixin, PushToHubMixin, PeftAdapterMixin, DistributedMixin, KernelConfig, LoadStateDictConfig, _get_resolved_checkpoint_files, _get_dtype, local_torch_dtype, ContextManagers, AttentionInterface\
-,get_torch_context_manager_or_global_device, _load_parameter_into_model
+from transformers.modeling_utils import EmbeddingAccessMixin, ModuleUtilsMixin, PushToHubMixin, PeftAdapterMixin, DistributedMixin, LoadStateDictConfig, _get_resolved_checkpoint_files, _get_dtype, local_torch_dtype, ContextManagers, _load_parameter_into_model
 from transformers.generation import GenerationConfig
 from transformers.utils.loading_report import LoadStateDictInfo
 from transformers import initialization as init
-from functools import partial, wraps
-from transformers.integrations.peft import maybe_load_adapters
+from functools import wraps
 from transformers.integrations.accelerate import check_and_set_device_map
 from transformers.quantizers.auto import get_hf_quantizer
 from transformers.monkey_patching import apply_patches, patch_output_recorders
 from transformers.integrations import PeftAdapterMixin
-from transformers.integrations.hub_kernels import allow_all_hub_kernels
 from transformers.conversion_mapping import get_model_conversion_mapping
 import re
 from safetensors import safe_open
@@ -34,61 +31,30 @@ from typing import Optional, TypeVar
 
 SpecificPreTrainedModelType = TypeVar("SpecificPreTrainedModelType", bound="PreTrainedModel")
 class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToHubMixin, PeftAdapterMixin, DistributedMixin):
-
-    # General model properties
     config_class: type[PreTrainedConfig] | None = None
     generation_config_class: type[GenerationConfig] = GenerationConfig  # default, used with `GenerationMixin`
     _auto_class = None
     base_model_prefix: str = ""
     _is_stateful: bool = False
     model_tags: list[str] | None = None
-
-    # Input-related properties
     main_input_name: str = "input_ids"
-    # Attributes used mainly in multimodal LLMs, though all models contain a valid field for these
-    # Possible values are: text, image, video, audio and time
     input_modalities: str | list[str] = "text"
-
-    # Device-map related properties
     _no_split_modules: set[str] | list[str] | None = None
     _skip_keys_device_placement: set[str] | list[str] | None = None
-
-    # Specific dtype upcasting
-    # `_keep_in_fp32_modules` will upcast to fp32 only if the requested dtype is fp16
-    # `_keep_in_fp32_modules_strict` will upcast to fp32 independently if the requested dtype is fp16 or bf16
     _keep_in_fp32_modules: set[str] | list[str] | None = None
     _keep_in_fp32_modules_strict: set[str] | list[str] | None = None
-
-    # Loading-specific properties
-    # A dictionary `{"target": "source"}` of checkpoint keys that are potentially tied to one another
     _tied_weights_keys: dict[str, str] = None
-    # A list of `re` patterns describing keys to ignore if they are missing from checkpoints to avoid warnings
     _keys_to_ignore_on_load_missing: set[str] | list[str] | None = None
-    # A list of `re` patterns describing keys to ignore if they are unexpected in the checkpoints to avoid warnings
     _keys_to_ignore_on_load_unexpected: set[str] | list[str] | None = None
-    # A list of keys to ignore when saving the model
     _keys_to_ignore_on_save: set[str] | list[str] | None = None
-
-    # Attention interfaces support properties
     _supports_sdpa: bool = False
     _supports_flash_attn: bool = False
     _supports_flex_attn: bool = False
-    # Model's compatible flash kernels (e.g., "kernels-community/flash-mla") defaulting to the first in the list
     _compatible_flash_implementations: list[str] | None = None
-
-    # Set to `False` by models that can never run under context parallelism, whatever their config
-    # (attention sinks, for instance, which SDPA cannot express). Models whose *config* rules it out are
-    # handled by `supports_context_parallel` below, so this stays `True` for almost everything.
     _supports_context_parallel: bool = True
-
-    # Advanced functionalities support
     supports_gradient_checkpointing: bool = False
     _can_compile_fullgraph: bool = False
-    # This flag signal that the model can be used as an efficient backend in TGI and vLLM
-    # In practice, it means that they support attention (mask) interface functions, fully pass the kwargs
-    # through all modules up to the Attention layer, can slice logits with Tensor, and have a default TP plan
     _supports_attention_backend: bool = False
-    # A mapping describing what outputs can be captured by `capture_outputs` decorator during the forward pass
     _can_record_outputs: dict | None = None
 
     def __init__(self, config: PreTrainedConfig, *inputs, **kwargs):
@@ -293,7 +259,7 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
             use_safetensors=use_safetensors,
             download_kwargs=download_kwargs,
             user_agent=user_agent,
-            is_remote_code=cls.is_remote_code(),
+            is_remote_code=False,
             transformers_explicit_filename=getattr(config, "transformers_weights", None),
             tqdm_class=tqdm_class,
         )
@@ -434,10 +400,7 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
                 yield name, tensor
 
     @classmethod
-    def is_remote_code(cls) -> bool:
-        """Return whether the current model is custom code, i.e. code loaded from the hub, or class that we just registered
-        via `register_for_auto_class`."""
-        return cls._auto_class is not None
+    def is_remote_code(cls) -> bool: return False
 
 _LazyAutoMappingValue = tuple[type[Any] | None, type[Any] | None]
 _T = TypeVar("_T")
@@ -806,11 +769,6 @@ class WhisperEncoder(WhisperPreTrainedModel):
 
 
 class VQAdaptor(nn.Module):
-    """Projects merged Whisper features to LM hidden dim.
-
-    ``Linear(in → hidden) → SiLU → Linear(hidden → hidden) → LayerNorm``
-    """
-
     def __init__(self, input_dim: int, hidden_size: int, norm_eps: float = 1e-6):
         super().__init__()
         self.layers = nn.Sequential(
