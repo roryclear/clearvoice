@@ -116,7 +116,7 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
         init.copy_(module.inv_freq, buffer_value)
         init.copy_(module.original_inv_freq, buffer_value)
 
-    def _initialize_weights(self, module, is_custom_code: bool = False):
+    def _initialize_weights(self, module, is_custom_code: bool = True):
         """
         Initialize the weights if they are not already initialized.
         """
@@ -162,7 +162,7 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
         # Let the magic happen with this simple call
         smart_apply_fn = getattr(self, "smart_apply")
         # `getattr(self, ...)` returns a bound method, so `self` is already provided as the receiver.
-        smart_apply_fn(self._initialize_weights, self.is_custom_code())
+        smart_apply_fn(self._initialize_weights, True)
 
     def get_expanded_tied_weights_keys(self, all_submodels: bool = False) -> dict:
         return {} if self._tied_weights_keys is None else self._tied_weights_keys.copy()
@@ -415,13 +415,12 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
             param = self.get_parameter(tied_param)
             setattr(param, "_is_hf_initialized", True)
 
-        if self.is_custom_code():
-            loading_info.missing_keys = {
-                key
-                for key in loading_info.missing_keys
-                if key in self.all_tied_weights_keys
-                or not getattr(self.get_parameter_or_buffer(key), "_is_hf_initialized", False)
-            }
+        loading_info.missing_keys = {
+            key
+            for key in loading_info.missing_keys
+            if key in self.all_tied_weights_keys
+            or not getattr(self.get_parameter_or_buffer(key), "_is_hf_initialized", False)
+        }
 
     def get_parameter_or_buffer(self, target: str): return self.get_parameter(target)
 
@@ -439,12 +438,6 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
         """Return whether the current model is custom code, i.e. code loaded from the hub, or class that we just registered
         via `register_for_auto_class`."""
         return cls._auto_class is not None
-
-    @classmethod
-    def is_custom_code(cls) -> bool:
-        """Return whether the current model is custom code, i.e. either code loaded from the hub, or defined in any user-specific
-        module/session."""
-        return cls.is_remote_code() or not cls.__module__.startswith("transformers.")
 
 _LazyAutoMappingValue = tuple[type[Any] | None, type[Any] | None]
 _T = TypeVar("_T")
